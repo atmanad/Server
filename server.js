@@ -3,17 +3,33 @@ const app = express();
 const sql = require('mssql');
 const config = require('./config');
 const cors = require('cors');
+const mongoose = require('mongoose');
+const Users = require('./model');
+const bodyParser = require('body-parser');
+
+// Parse JSON bodies
+app.use(bodyParser.json());
+
 app.use(cors());
 app.use(express.json());
-sql.connect(config)
-  .then(() => {
-    console.log('Connected to Azure SQL Database');
+
+// Connect to MongoDB
+mongoose
+  .connect(config.mongodb.uri, {
+    useNewUrlParser: true,
+    useUnifiedTopology: true,
+    dbName: 'si-db'
   })
-  .catch((err) => {
-    console.error('Error connecting to Azure SQL Database:', err);
+  .then(() => {
+    console.log('Connected to MongoDB');
+  })
+  .catch((error) => {
+    console.error('Error connecting to MongoDB:', error);
   });
 
-// Define routes here
+
+// ============================================ Transaction API =============================================================== //
+
 // Fetch all Transactions
 app.get('/api/v1/transactions', async (req, res) => {
   try {
@@ -55,6 +71,53 @@ app.get('/api/v1/transactions/month/:startDate/:endDate', async (req, res) => {
 
 
 // Endpoint to insert a transaction
+
+app.post('/api/v1/transactions', async (req, res) => {
+  try {
+    const { userId, year, month, transaction } = req.body;
+
+    // Find the user by ID
+    let user = await Users.findOne({ 'userid': userId });
+
+    // If user not found, create a new user document
+    if (!user) {
+      user = new Users({
+        userid: userId,
+        balance: 0,
+        expenses: []
+      });
+    }
+
+    // Find the expense for the given year and month within the user
+    let expense = user.expenses.find((exp) => exp.year === year && exp.month === month);
+
+    // If expense not found, create a new expense for the given year and month
+    if (!expense) {
+      expense = {
+        year: year,
+        month: month,
+        transactions: [],
+        savings: 0,
+        income: 0
+      };
+      user.expenses.push(expense);
+    }
+
+    // Add the transaction to the expense
+    expense.transactions.push(transaction);
+
+    // Save the updated user document
+    await user.save();
+
+    res.sendStatus(200);
+  } catch (error) {
+    console.error('Error inserting transaction:', error);
+    res.sendStatus(500);
+  }
+});
+
+
+
 app.post('/api/v1/transactions', async (req, res) => {
   try {
     console.log(req.body);
@@ -92,12 +155,16 @@ app.delete('/api/v1/transactions/:transactionId', async (req, res) => {
   }
 });
 
+// ============================================ Category API =============================================================== //
 // Fetch all categories
-app.get('/api/v1/categories', async (req, res) => {
+app.get('/api/v1/categories/:userId', async (req, res) => {
   try {
-    const pool = await sql.connect(config);
-    const result = await pool.request().query('SELECT * FROM Categories');
-    res.json(result.recordset);
+    const { userId } = req.params;
+    const user = await Users.findOne({ userId: userId });
+    if (!user) {
+      return res.status(404).json({ error: 'User not found' });
+    }
+    res.json(user.categories);
   } catch (error) {
     console.error('Error fetching categories:', error);
     res.sendStatus(500);
@@ -107,10 +174,26 @@ app.get('/api/v1/categories', async (req, res) => {
 // Insert a category
 app.post('/api/v1/categories', async (req, res) => {
   try {
+    const { userId, categoryName } = req.body;
     console.log(req.body);
-    const { categoryName } = req.body;
-    const pool = await sql.connect(config);
-    await pool.request().input('categoryName', sql.VarChar(255), categoryName).query('INSERT INTO Categories (CategoryName) VALUES (@categoryName)');
+
+    let user = await Users.findOne({ userId: userId });
+    if (!user) {
+      user = new Users({
+        userId: userId,
+        balance: 0,
+        expenses: [],
+        categories: [],
+        labels: []
+      });
+    }
+    const categoryExists = user.categories.some(category => category.categoryName === categoryName);
+    if (categoryExists){
+      return res.status(409).json({error:'Category alreay exists'});
+    } 
+
+    user.categories.push({ categoryName: categoryName });
+    await user.save();
     res.sendStatus(200);
   } catch (error) {
     console.error('Error inserting category:', error);
@@ -119,12 +202,17 @@ app.post('/api/v1/categories', async (req, res) => {
 });
 
 // Delete a category
-app.delete('/api/v1/categories/:categoryId', async (req, res) => {
+app.delete('/api/v1/categories/:userId/:categoryId', async (req, res) => {
   try {
-    console.log(req.params);
-    const { categoryId } = req.params;
-    const pool = await sql.connect(config);
-    await pool.request().input('categoryId', sql.Int, categoryId).query('DELETE FROM Categories WHERE CategoryID = @categoryId');
+    const { userId,categoryId } = req.params;
+    let user = await Users.findOne({ userId: userId });
+    if(!user) return res.status(404).json({error:'User not found'});
+
+    const indexToDelete = user.categories.findIndex(obj => obj._id.toString() === categoryId);
+    if(indexToDelete === -1)return res.status(404).json({error:'Category not found'});
+
+    user.categories.splice(indexToDelete, 1);
+    await user.save();
     res.sendStatus(200);
   } catch (error) {
     console.error('Error deleting category:', error);
@@ -132,6 +220,7 @@ app.delete('/api/v1/categories/:categoryId', async (req, res) => {
   }
 });
 
+// ============================================ Label API =============================================================== //
 // Fetch all labels
 app.get('/api/v1/labels', async (req, res) => {
   try {
@@ -186,7 +275,7 @@ app.get('/api/v1/expenses/:year/:month', async (req, res) => {
     const pool = await sql.connect(config);
 
     // Fetch all transactions from the 'Transactions' table
-    console.log("Fething transactions for", year," ", month);
+    console.log("Fething transactions for", year, " ", month);
     const result = await pool.request()
       .input('year', sql.Int, year)
       .input('month', sql.Int, month)
@@ -209,17 +298,17 @@ app.post('/api/v1/expenses', async (req, res) => {
     const checkQuery = `SELECT * FROM MonthlySummary WHERE Month = ${Month} AND Year = ${Year}`;
     const checkResult = await pool.request().query(checkQuery);
 
-    if(checkResult.recordset.length > 0){
+    if (checkResult.recordset.length > 0) {
       console.log("updating monthly summary", req.body);
       const updateQuery = `UPDATE MonthlySummary SET Balance = ${Balance}, Income = ${Income}, Expenses = ${Expenses} WHERE Month = ${Month} AND Year = ${Year}`;
       await pool.request().query(updateQuery);
-    }else{
+    } else {
       //the record doesn't exist, insert a new record
       console.log("inserting monthly summary", req.body);
       const insertQuery = `INSERT INTO MonthlySummary (Month, Year, Balance, Income, Expenses) VALUES (${Month}, ${Year}, ${Balance}, ${Income}, ${Expenses})`;
       await pool.request().query(insertQuery);
     }
-    
+
     res.sendStatus(200);
   } catch (error) {
     console.error('Error inserting Monthly Summary:', error);
