@@ -24,7 +24,7 @@ const usersSchema = new mongoose.Schema({
     balance: { type: Number, required: true },
     expenses: [expenseSchema],
     categories: { type: [{categoryName: String}], default: [] },
-    labels: { type: Array, default: [] },
+    labels: {type: [{labelName: String}], default: [] },
 });
 
 

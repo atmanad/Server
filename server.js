@@ -222,11 +222,14 @@ app.delete('/api/v1/categories/:userId/:categoryId', async (req, res) => {
 
 // ============================================ Label API =============================================================== //
 // Fetch all labels
-app.get('/api/v1/labels', async (req, res) => {
+app.get('/api/v1/labels/:userId', async (req, res) => {
   try {
-    const pool = await sql.connect(config);
-    const result = await pool.request().query('SELECT * FROM Labels');
-    res.json(result.recordset);
+    const { userId } = req.params;
+    const user = await Users.findOne({ userId: userId });
+    if (!user) {
+      return res.status(404).json({ error: 'User not found' });
+    }
+    res.json(user.labels);
   } catch (error) {
     console.error('Error fetching labels:', error);
     res.sendStatus(500);
@@ -236,12 +239,25 @@ app.get('/api/v1/labels', async (req, res) => {
 // Insert a label
 app.post('/api/v1/labels', async (req, res) => {
   try {
-    const { labelName } = req.body;
-    const pool = await sql.connect(config);
-    await pool
-      .request()
-      .input('labelName', sql.VarChar(255), labelName)
-      .query('INSERT INTO Labels (LabelName) VALUES (@labelName)');
+    const { userId, labelName } = req.body;
+
+    let user = await Users.findOne({ userId: userId });
+    if (!user) {
+      user = new Users({
+        userId: userId,
+        balance: 0,
+        expenses: [],
+        categories: [],
+        labels: []
+      });
+    }
+    const labelExists = user.labels.some(label => label.labelName === labelName);
+    if (labelExists){
+      return res.status(409).json({error:'Label alreay exists'});
+    } 
+
+    user.labels.push({ labelName: labelName });
+    await user.save();
     res.sendStatus(200);
   } catch (error) {
     console.error('Error inserting label:', error);
@@ -250,14 +266,18 @@ app.post('/api/v1/labels', async (req, res) => {
 });
 
 // Delete a label
-app.delete('/api/v1/labels/:labelId', async (req, res) => {
+app.delete('/api/v1/labels/:userId/:labelId', async (req, res) => {
   try {
-    const { labelId } = req.params;
-    const pool = await sql.connect(config);
-    await pool
-      .request()
-      .input('labelId', sql.Int, labelId)
-      .query('DELETE FROM Labels WHERE LabelID = @labelId');
+    const { userId,labelId } = req.params;
+    let user = await Users.findOne({ userId: userId });
+    if(!user) return res.status(404).json({error:'User not found'});
+    console.log(user);
+
+    const indexToDelete = user.labels.findIndex(obj => obj._id.toString() === labelId);
+    if(indexToDelete === -1)return res.status(404).json({error:'Label not found'});
+
+    user.labels.splice(indexToDelete, 1);
+    await user.save();
     res.sendStatus(200);
   } catch (error) {
     console.error('Error deleting label:', error);
