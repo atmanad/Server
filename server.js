@@ -89,14 +89,12 @@ app.get('/api/v1/transactions/month/:startDate/:endDate', async (req, res) => {
 
 
 // Endpoint to insert a transaction
-
 app.post('/api/v1/transactions', async (req, res) => {
   try {
     const { userId, transaction } = req.body;
     const tDate = new Date(transaction.date);
     const month = tDate.getMonth() + 1;
     const year = tDate.getFullYear();
-
 
     // Find the user by ID
     let user = await Users.findOne({ userId: userId });
@@ -124,7 +122,7 @@ app.post('/api/v1/transactions', async (req, res) => {
         month: month,
         transactions: [],
         savings: 0,
-        income: 0
+        income: []
       };
       user.expenses.push(expense);
     }
@@ -141,31 +139,6 @@ app.post('/api/v1/transactions', async (req, res) => {
     res.sendStatus(500);
   }
 });
-
-
-
-// app.post('/api/v1/transactions', async (req, res) => {
-//   try {
-//     console.log(req.body);
-//     const { category, date, amount, notes } = req.body;
-
-//     // Create a new SQL connection pool
-//     const pool = await sql.connect(config);
-
-//     // Insert the transaction into the 'Transactions' table
-//     await pool.request()
-//       .input('category', sql.VarChar(255), category)
-//       .input('date', sql.Date, date)
-//       .input('amount', sql.Decimal(10, 2), amount)
-//       .input('notes', sql.VarChar(255), notes)
-//       .query('INSERT INTO Transactions (Category, Date, Amount, Notes) VALUES (@category, @date, @amount, @notes)');
-
-//     res.sendStatus(200);
-//   } catch (error) {
-//     console.error('Error inserting transaction:', error);
-//     res.sendStatus(500);
-//   }
-// });
 
 //Delete a transaction
 app.delete('/api/v1/transactions', async (req, res) => {
@@ -327,6 +300,73 @@ app.delete('/api/v1/labels/:userId/:labelId', async (req, res) => {
     res.sendStatus(200);
   } catch (error) {
     console.error('Error deleting label:', error);
+    res.sendStatus(500);
+  }
+});
+
+// ============================================ Income API =============================================================== //
+// Insert an income
+app.post('/api/v1/income', async (req, res) => {
+  try {
+    const { userId, income } = req.body;
+    const { month, year } = dateStringToMonthYear(income.date);
+
+    let user = await Users.findOne({ userId: userId });
+    if (!user) {
+      user = new Users({
+        userId: userId,
+        balance: 0,
+        expenses: [],
+        categories: [],
+        labels: []
+      });
+    }
+    // Find the expense for the given year and month within the user
+    let expense = user.expenses.find((exp) => exp.year === year && exp.month === month);
+    console.log(expense);
+
+    // If expense not found, create a new expense for the given year and month
+    if (!expense) {
+      expense = {
+        year: year,
+        month: month,
+        transactions: [],
+        savings: 0,
+        income: [income]
+      };
+      user.expenses.push(expense);
+    }else{
+      expense.income.push(income);
+    }
+
+    await user.save();
+    res.sendStatus(200);
+  } catch (error) {
+    console.error('Error inserting label:', error);
+    res.sendStatus(500);
+  }
+});
+
+// Fetch income
+// Fetch income for a specific month and year
+app.get('/api/v1/income', async (req, res) => {
+  try {
+    const { userId, date } = req.query;
+    const {month, year} = dateStringToMonthYear(date);
+
+    const user = await Users.findOne({ userId: userId });
+    if (!user) {
+      return res.status(404).json({ error: 'User not found' });
+    }
+
+    const expense = user.expenses.find((exp) => exp.year === Number(year) && exp.month === Number(month));
+    if (!expense) {
+      return res.status(404).json({ error: 'Expense not found' });
+    }
+
+    res.json(expense.income);
+  } catch (error) {
+    console.error('Error fetching income:', error);
     res.sendStatus(500);
   }
 });

@@ -15,7 +15,7 @@ const expenseSchema = new mongoose.Schema({
     month: { type: Number, required: true },
     transactions: [transactionSchema],
     savings: { type: Number, required: true },
-    income: { type: Number, required: true }
+    income: { type: [{ amount: Number, date: Date, notes: String }], default: [] }
 });
 
 // Define the schema for the users collection
@@ -23,8 +23,8 @@ const usersSchema = new mongoose.Schema({
     userId: { type: String, required: true },
     balance: { type: Number, required: true },
     expenses: [expenseSchema],
-    categories: { type: [{categoryName: String}], default: [] },
-    labels: {type: [{labelName: String}], default: [] },
+    categories: { type: [{ categoryName: String }], default: [] },
+    labels: { type: [{ labelName: String }], default: [] },
 });
 
 
