@@ -42,12 +42,12 @@ const dateStringToMonthYear = (dateString) => {
 app.get('/api/v1/transactions', async (req, res) => {
   try {
     const { userId, selectedMonth } = req.query;
-    console.log("userId", userId, "month", selectedMonth);
+    // console.log("userId", userId, "month", selectedMonth);
     monthObject = new Date(selectedMonth);
     const month = monthObject.getMonth() + 1;
     const year = monthObject.getFullYear();
 
-    console.log(month, year);
+    // console.log(month, year);
 
     const user = await Users.findOne({ userId: userId });
     if (!user) {
@@ -58,7 +58,7 @@ app.get('/api/v1/transactions', async (req, res) => {
     if (!expense) {
       return res.status(404).json({ error: 'No spending history found' });
     }
-    res.json(expense.transactions);
+    res.json({ transactions: expense.transactions, savings: expense.savings });
   } catch (error) {
     console.error('Error fetching transactions:', error);
     res.sendStatus(500);
@@ -99,8 +99,6 @@ app.post('/api/v1/transactions', async (req, res) => {
     // Find the user by ID
     let user = await Users.findOne({ userId: userId });
 
-    console.log("line 95", user);
-
     // If user not found, create a new user document
     if (!user) {
       user = new Users({
@@ -129,6 +127,7 @@ app.post('/api/v1/transactions', async (req, res) => {
 
     // Add the transaction to the expense
     expense.transactions.push(transaction);
+    expense.savings -= Number(transaction.amount);
 
     // Save the updated user document
     await user.save();
@@ -144,22 +143,20 @@ app.post('/api/v1/transactions', async (req, res) => {
 app.delete('/api/v1/transactions', async (req, res) => {
   try {
     const { userId, transactionId, date } = req.query;
-    console.log(req.query);
-    console.log(date);
     const { month, year } = dateStringToMonthYear(date);
-    console.log(month, year);
     const user = await Users.findOne({ userId: userId });
-    console.log(user);
     const expense = user.expenses.find(exp => exp.year === year && exp.month === month);
 
     if (!expense) {
       return res.status(404).json({ error: 'Expense not found' });
     }
-    console.log(expense);
     const transactionIndex = expense.transactions.findIndex((trans) => trans._id.toString() === transactionId);
     if (transactionIndex === -1) {
       return res.status(404).json({ error: 'Transaction not found' });
     }
+
+    // Add the amount to savings
+    expense.savings += expense.transactions[transactionIndex].amount;
 
     // Remove the transaction from the transactions array
     expense.transactions.splice(transactionIndex, 1);
@@ -194,7 +191,6 @@ app.get('/api/v1/categories/:userId', async (req, res) => {
 app.post('/api/v1/categories', async (req, res) => {
   try {
     const { userId, categoryName } = req.body;
-    console.log(req.body);
 
     let user = await Users.findOne({ userId: userId });
     if (!user) {
@@ -290,7 +286,6 @@ app.delete('/api/v1/labels/:userId/:labelId', async (req, res) => {
     const { userId, labelId } = req.params;
     let user = await Users.findOne({ userId: userId });
     if (!user) return res.status(404).json({ error: 'User not found' });
-    console.log(user);
 
     const indexToDelete = user.labels.findIndex(obj => obj._id.toString() === labelId);
     if (indexToDelete === -1) return res.status(404).json({ error: 'Label not found' });
@@ -335,9 +330,12 @@ app.post('/api/v1/income', async (req, res) => {
         income: [income]
       };
       user.expenses.push(expense);
-    }else{
+    } else {
       expense.income.push(income);
     }
+
+    // Add the amount to monthly savings
+    expense.savings += Number(income.amount);
 
     await user.save();
     res.sendStatus(200);
@@ -347,12 +345,11 @@ app.post('/api/v1/income', async (req, res) => {
   }
 });
 
-// Fetch income
 // Fetch income for a specific month and year
 app.get('/api/v1/income', async (req, res) => {
   try {
     const { userId, date } = req.query;
-    const {month, year} = dateStringToMonthYear(date);
+    const { month, year } = dateStringToMonthYear(date);
 
     const user = await Users.findOne({ userId: userId });
     if (!user) {
@@ -364,7 +361,7 @@ app.get('/api/v1/income', async (req, res) => {
       return res.status(404).json({ error: 'Expense not found' });
     }
 
-    res.json(expense.income);
+    res.json({income:expense.income, savings:expense.savings});
   } catch (error) {
     console.error('Error fetching income:', error);
     res.sendStatus(500);
