@@ -9,8 +9,11 @@ const bodyParser = require('body-parser');
 
 // Parse JSON bodies
 app.use(bodyParser.json());
+const corsOptions = {
+  origin: 'https://10.1.0.4:3000/', // Replace this with your frontend domain
+};
 
-app.use(cors());
+app.use(cors(corsOptions));
 app.use(express.json());
 
 // Connect to MongoDB
@@ -51,14 +54,23 @@ app.get('/api/v1/transactions', async (req, res) => {
 
     const user = await Users.findOne({ userId: userId });
     if (!user) {
-      return res.status(404).json({ error: 'User not found' });
+      user = new Users({
+        userId: userId,
+        balance: 0,
+        expenses: [],
+        categories: [{ categoryName: 'Food' }, { categoryName: "Travel" }],
+        labels: []
+      });
+      await user.save();
+      return res.json({ transactions: [], savings: 0, incomes: [], balance: 0 })
     }
 
     let expense = user.expenses.find((exp) => exp.year === year && exp.month === month);
     if (!expense) {
-      return res.status(404).json({ error: 'No spending history found' });
+      return res.json({ transactions: [], savings: 0, incomes: [], balance: user.balance })
     }
-    res.json({ transactions: expense.transactions, savings: expense.savings });
+
+    res.json({ transactions: expense.transactions, savings: expense.savings, incomes: expense.income, balance: user.balance });
   } catch (error) {
     console.error('Error fetching transactions:', error);
     res.sendStatus(500);
@@ -118,16 +130,16 @@ app.post('/api/v1/transactions', async (req, res) => {
       expense = {
         year: year,
         month: month,
-        transactions: [],
-        savings: 0,
+        transactions: [transaction],
+        savings: -Number(transaction.amount),
         income: []
       };
       user.expenses.push(expense);
     }
-
-    // Add the transaction to the expense
+    // Add the transaction to the expense & total balance
     expense.transactions.push(transaction);
     expense.savings -= Number(transaction.amount);
+    user.balance -= Number(transaction.amount);
 
     // Save the updated user document
     await user.save();
@@ -155,8 +167,9 @@ app.delete('/api/v1/transactions', async (req, res) => {
       return res.status(404).json({ error: 'Transaction not found' });
     }
 
-    // Add the amount to savings
+    // Add the amount to savings & total balance
     expense.savings += expense.transactions[transactionIndex].amount;
+    user.balance += expense.transactions[transactionIndex].amount;
 
     // Remove the transaction from the transactions array
     expense.transactions.splice(transactionIndex, 1);
@@ -176,9 +189,17 @@ app.delete('/api/v1/transactions', async (req, res) => {
 app.get('/api/v1/categories/:userId', async (req, res) => {
   try {
     const { userId } = req.params;
-    const user = await Users.findOne({ userId: userId });
+    let user = await Users.findOne({ userId: userId });
     if (!user) {
-      return res.status(404).json({ error: 'User not found' });
+      user = new Users({
+        userId: userId,
+        balance: 0,
+        expenses: [],
+        categories: [{ categoryName: 'Food' }, { categoryName: "Travel" }],
+        labels: []
+      });
+      await user.save();
+      return res.json([]);
     }
     res.json(user.categories);
   } catch (error) {
@@ -242,7 +263,7 @@ app.get('/api/v1/labels/:userId', async (req, res) => {
     const { userId } = req.params;
     const user = await Users.findOne({ userId: userId });
     if (!user) {
-      return res.status(404).json({ error: 'User not found' });
+      return res.json([]);
     }
     res.json(user.labels);
   } catch (error) {
@@ -326,16 +347,17 @@ app.post('/api/v1/income', async (req, res) => {
         year: year,
         month: month,
         transactions: [],
-        savings: 0,
+        savings: Number(income.amount),
         income: [income]
       };
       user.expenses.push(expense);
     } else {
       expense.income.push(income);
+      expense.savings += Number(income.amount);
     }
 
-    // Add the amount to monthly savings
-    expense.savings += Number(income.amount);
+    // Add the amount to monthly savings & total balance
+    user.balance += Number(income.amount);
 
     await user.save();
     res.sendStatus(200);
@@ -353,15 +375,15 @@ app.get('/api/v1/income', async (req, res) => {
 
     const user = await Users.findOne({ userId: userId });
     if (!user) {
-      return res.status(404).json({ error: 'User not found' });
+      return res.json({ income: [], savings: 0, balance: 0 });
     }
 
     const expense = user.expenses.find((exp) => exp.year === Number(year) && exp.month === Number(month));
     if (!expense) {
-      return res.status(404).json({ error: 'Expense not found' });
+      return res.json({ income: [], savings: 0, balance: 0 });
     }
 
-    res.json({income:expense.income, savings:expense.savings});
+    res.json({ income: expense.income, savings: expense.savings, balance: user.balance });
   } catch (error) {
     console.error('Error fetching income:', error);
     res.sendStatus(500);
@@ -370,55 +392,24 @@ app.get('/api/v1/income', async (req, res) => {
 
 
 // Manage Expence and Balance
-// app.get('/api/v1/expenses/:year/:month', async (req, res) => {
-//   try {
-//     const { year, month } = req.params;
+app.get('/api/v1/user', async (req, res) => {
+  try {
+    console.log(req.query);
+    const { userId } = req.query;
+    console.log(userId);
+    fetch(`https://spend-insight.us.auth0.com/api/v2/users/${encodeURIComponent(userId)}`)
+      .then(response => {
+        console.log(response);
+        return response.json();
+      })
+      .then(data => console.log(data))
+      .catch(error => console.log(error));
 
-//     // Create a new SQL connection pool
-//     const pool = await sql.connect(config);
-
-//     // Fetch all transactions from the 'Transactions' table
-//     console.log("Fething transactions for", year, " ", month);
-//     const result = await pool.request()
-//       .input('year', sql.Int, year)
-//       .input('month', sql.Int, month)
-//       .query('SELECT * FROM MonthlySummary WHERE Year = @year AND Month = @month');
-
-//     // Send the fetched expenses as the response
-//     res.json(result.recordset);
-//   } catch (error) {
-//     console.error('Error fetching MonthlySummary:', error);
-//     res.sendStatus(500);
-//   }
-// });
-
-// app.post('/api/v1/expenses', async (req, res) => {
-//   try {
-//     const { Year, Month, Balance, Income, Expenses } = req.body;
-//     // console.log("Data", req.body);
-//     // Create a new SQL connection pool
-//     const pool = await sql.connect(config);
-//     const checkQuery = `SELECT * FROM MonthlySummary WHERE Month = ${Month} AND Year = ${Year}`;
-//     const checkResult = await pool.request().query(checkQuery);
-
-//     if (checkResult.recordset.length > 0) {
-//       console.log("updating monthly summary", req.body);
-//       const updateQuery = `UPDATE MonthlySummary SET Balance = ${Balance}, Income = ${Income}, Expenses = ${Expenses} WHERE Month = ${Month} AND Year = ${Year}`;
-//       await pool.request().query(updateQuery);
-//     } else {
-//       //the record doesn't exist, insert a new record
-//       console.log("inserting monthly summary", req.body);
-//       const insertQuery = `INSERT INTO MonthlySummary (Month, Year, Balance, Income, Expenses) VALUES (${Month}, ${Year}, ${Balance}, ${Income}, ${Expenses})`;
-//       await pool.request().query(insertQuery);
-//     }
-
-//     res.sendStatus(200);
-//   } catch (error) {
-//     console.error('Error inserting Monthly Summary:', error);
-//     res.sendStatus(500);
-//   }
-// });
-
+  } catch (error) {
+    console.error('Error fetching MonthlySummary:', error);
+    res.sendStatus(500);
+  }
+});
 
 const port = process.env.PORT || 3001;
 app.listen(port, () => {
