@@ -13,7 +13,7 @@ app.use(bodyParser.json());
 
 const allowedOrigins = [
   'https://spend-insight.netlify.app',
-  'https://10.1.0.4:3000' // You can add more origins as needed
+  'https://10.1.0.4:3000'
 ];
 
 const corsOptions = {
