@@ -10,8 +10,21 @@ const { MONGODB_URI } = process.env
 
 // Parse JSON bodies
 app.use(bodyParser.json());
+
+const allowedOrigins = [
+  'https://spend-insight.netlify.app',
+  'https://10.1.0.4:3000' // You can add more origins as needed
+];
+
 const corsOptions = {
-  origin: 'https://10.1.0.4:3000/', // Replace this with your frontend domain
+  origin: (origin, callback) => {
+    // Check if the request origin is in the allowedOrigins array
+    if (!origin || allowedOrigins.includes(origin)) {
+      callback(null, true);
+    } else {
+      callback(new Error('Not allowed by CORS'));
+    }
+  },
 };
 
 app.use(cors(corsOptions));
