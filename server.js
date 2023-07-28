@@ -91,28 +91,6 @@ app.get('/api/v1/transactions', async (req, res) => {
   }
 });
 
-// Fetch transactions by month
-app.get('/api/v1/transactions/month/:startDate/:endDate', async (req, res) => {
-  try {
-    const { startDate, endDate } = req.params;
-
-    // Create a new SQL connection pool
-    // const pool = await sql.connect(config);
-
-    // Fetch all transactions from the 'Transactions' table
-    const result = await pool.request()
-      .input('firstDayOfMonth', sql.Date, startDate)
-      .input('lastDayOfMonth', sql.Date, endDate)
-      .query('SELECT * FROM Transactions WHERE Date >= @firstDayOfMonth AND Date <= @lastDayOfMonth ORDER BY Date DESC');
-
-    // Send the fetched transactions as the response
-    res.json(result.recordset);
-  } catch (error) {
-    console.error('Error fetching transactions:', error);
-    res.sendStatus(500);
-  }
-});
-
 
 // Endpoint to insert a transaction
 app.post('/api/v1/transactions', async (req, res) => {
