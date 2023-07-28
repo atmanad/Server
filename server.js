@@ -1,7 +1,6 @@
 const express = require('express');
 const app = express();
 const sql = require('mssql');
-const config = require('./config');
 const cors = require('cors');
 const mongoose = require('mongoose');
 const Users = require('./model');
@@ -85,7 +84,7 @@ app.get('/api/v1/transactions/month/:startDate/:endDate', async (req, res) => {
     const { startDate, endDate } = req.params;
 
     // Create a new SQL connection pool
-    const pool = await sql.connect(config);
+    // const pool = await sql.connect(config);
 
     // Fetch all transactions from the 'Transactions' table
     const result = await pool.request()
