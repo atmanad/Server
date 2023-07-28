@@ -15,7 +15,7 @@ const corsOptions = {
 
 app.use(cors(corsOptions));
 app.use(express.json());
-
+ 
 // Connect to MongoDB
 mongoose
   .connect(config.mongodb.uri, {
