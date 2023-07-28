@@ -6,6 +6,8 @@ const cors = require('cors');
 const mongoose = require('mongoose');
 const Users = require('./model');
 const bodyParser = require('body-parser');
+require('dotenv').config();
+const { MONGODB_URI } = process.env
 
 // Parse JSON bodies
 app.use(bodyParser.json());
@@ -15,10 +17,10 @@ const corsOptions = {
 
 app.use(cors(corsOptions));
 app.use(express.json());
- 
+
 // Connect to MongoDB
 mongoose
-  .connect(config.mongodb.uri, {
+  .connect(MONGODB_URI, {
     useNewUrlParser: true,
     useUnifiedTopology: true,
     dbName: 'si-db'
