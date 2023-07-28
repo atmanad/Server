@@ -133,7 +133,7 @@ app.post('/api/v1/transactions', async (req, res) => {
         expenses: [],
         categories: [],
         labels: []
-      });
+      }); 
     }
 
     // Find the expense for the given year and month within the user
