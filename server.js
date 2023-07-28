@@ -125,7 +125,7 @@ app.post('/api/v1/transactions', async (req, res) => {
     // Find the user by ID
     let user = await Users.findOne({ userId: userId });
 
-    // If user not found, create a new user document
+    // If user not found, create a new user document 
     if (!user) {
       user = new Users({
         userId: userId,
