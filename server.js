@@ -59,12 +59,12 @@ const dateStringToMonthYear = (dateString) => {
 app.get('/api/v1/transactions', async (req, res) => {
   try {
     const { userId, selectedMonth } = req.query;
-    // console.log("userId", userId, "month", selectedMonth);
+    console.log("userId", userId, "month", selectedMonth);
     monthObject = new Date(selectedMonth);
-    const month = monthObject.getMonth() + 1;
+    const month = monthObject.getUTCMonth() + 1;
     const year = monthObject.getFullYear();
 
-    // console.log(month, year);
+    console.log(month, year);
 
     const user = await Users.findOne({ userId: userId });
     if (!user) {
