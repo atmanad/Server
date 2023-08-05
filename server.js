@@ -382,6 +382,39 @@ app.get('/api/v1/income', async (req, res) => {
   }
 });
 
+// Delete an income
+app.delete('/api/v1/income', async (req, res) => {
+  try {
+    const { userId, incomeId, date } = req.query;
+    const { month, year } = dateStringToMonthYear(date);
+    const user = await Users.findOne({ userId: userId });
+    const expense = user.expenses.find(exp => exp.year === year && exp.month === month);
+
+    if (!expense) {
+      return res.status(404).json({ error: 'Expense not found' });
+    }
+    const incomeIndex = expense.income.findIndex((inc) => inc._id.toString() === incomeId);
+    if (incomeIndex === -1) {
+      return res.status(404).json({ error: 'Income not found' });
+    }
+
+    // Remove the amount from savings & total balance
+    expense.savings -= expense.income[incomeIndex].amount;
+    user.balance -= expense.income[incomeIndex].amount;
+
+    // Remove the transaction from the transactions array
+    expense.income.splice(incomeIndex, 1);
+
+    // Save the updated user data
+    await user.save();
+
+    res.sendStatus(200);
+  } catch (error) {
+    console.error('Error deleting Income:', error);
+    res.sendStatus(500);
+  }
+});
+
 
 // Manage Expence and Balance
 app.get('/api/v1/user', async (req, res) => {

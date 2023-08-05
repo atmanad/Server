@@ -4,7 +4,7 @@ const mongoose = require('mongoose');
 const transactionSchema = new mongoose.Schema({
     amount: { type: Number, required: true },
     category: { type: String, required: true },
-    label: { type: String},
+    label: { type: String },
     notes: { type: String },
     date: { type: Date, required: true }
 });
@@ -15,7 +15,7 @@ const expenseSchema = new mongoose.Schema({
     month: { type: Number, required: true },
     transactions: [transactionSchema],
     savings: { type: Number, required: true },
-    income: { type: [{ amount: Number, date: Date, notes: String }], default: [] }
+    income: { type: [{ amount: Number, date: Date, category: String, notes: String }], default: [] }
 });
 
 // Define the schema for the users collection
