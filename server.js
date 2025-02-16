@@ -13,7 +13,7 @@ app.use(bodyParser.json());
 
 const allowedOrigins = [
   'https://spend-insight.netlify.app',
-  'https://10.1.0.4:3000'
+  'https://192.168.1.35:3000'
 ];
 
 const corsOptions = {
@@ -352,7 +352,7 @@ app.post('/api/v1/income', async (req, res) => {
     user.balance += Number(income.amount);
 
     await user.save();
-    res.sendStatus(200);
+    res.json({ income: expense.income, savings: expense.savings, balance: user.balance });
   } catch (error) {
     console.error('Error inserting label:', error);
     res.sendStatus(500);
@@ -408,7 +408,7 @@ app.delete('/api/v1/income', async (req, res) => {
     // Save the updated user data
     await user.save();
 
-    res.sendStatus(200);
+    res.json({ income: expense.income, savings: expense.savings, balance: user.balance });
   } catch (error) {
     console.error('Error deleting Income:', error);
     res.sendStatus(500);
