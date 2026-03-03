@@ -110,20 +110,21 @@ app.post('/api/v1/telegram', async (req, res) => {
     return res.status(405).json({ message: "Method not allowed" });
   }
 
-  const update = req.body;
+  const text = req.body?.message?.text;
 
-  if (!update.message || !update.message.text) {
-    return res.status(200).json({ status: "ignored" });
+  // ✅ Immediately respond to Telegram
+  res.status(200).json({ status: "received" });
+
+  // 🔥 Process AI in background (do not await)
+  if (text) {
+    parseWithAI(text)
+      .then(result => {
+        console.log("AI RESULT:", result);
+      })
+      .catch(err => {
+        console.error("AI ERROR:", err);
+      });
   }
-
-  const text = update.message.text.trim();
-  const chatId = update.message.chat.id;
-
-  const parsed = await parseWithAI(text);
-
-  console.log("AI Parsed:", parsed);
-
-  return res.status(200).json({ status: "parsed" });
 })
 
 // ============================================ Transaction API =============================================================== //
