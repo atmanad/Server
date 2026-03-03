@@ -54,12 +54,37 @@ const dateStringToMonthYear = (dateString) => {
 }
 
 app.post('/api/v1/telegram', async (req, res) => {
-  if (req.method == 'POST') {
-    console.log('Telegram req received')
-    res.status(200).json({ status: 'ok' })
-  } else {
-    res.status(405).json({ error: 'Method not allowed' })
+  if (req.method !== "POST") {
+    return res.status(405).json({ message: "Method not allowed" });
   }
+
+  const update = req.body;
+
+  if (!update.message || !update.message.text) {
+    return res.status(200).json({ status: "ignored" });
+  }
+
+  const text = update.message.text.trim();
+  const chatId = update.message.chat.id;
+
+  console.log("Raw text:", text);
+  console.log("Chat ID:", chatId);
+
+  // 🔹 Basic Parsing Logic
+  const parts = text.split(" ");
+  const amount = Number(parts[parts.length - 1]);
+  const title = parts.slice(0, -1).join(" ");
+
+  if (isNaN(amount)) {
+    console.log("Invalid format. Amount not found.");
+    return res.status(200).json({ status: "invalid format" });
+  }
+
+  console.log("Parsed Data:");
+  console.log("Title:", title);
+  console.log("Amount:", amount);
+
+  return res.status(200).json({ status: "parsed" });
 })
 
 // ============================================ Transaction API =============================================================== //
