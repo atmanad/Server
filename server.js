@@ -53,6 +53,51 @@ const dateStringToMonthYear = (dateString) => {
   }
 }
 
+async function parseWithAI(text) {
+  const response = await fetch(
+    "https://api-inference.huggingface.co/models/google/flan-t5-small",
+    {
+      method: "POST",
+      headers: {
+        Authorization: `Bearer ${process.env.HF_TOKEN}`,
+        "Content-Type": "application/json",
+      },
+      body: JSON.stringify({
+        inputs: `
+Extract expense details from this text:
+
+"${text}"
+
+Return ONLY valid JSON in this format:
+{
+  "amount": number,
+  "category": string,
+  "label": string,
+  "date": "YYYY-MM-DD"
+}
+
+If date is missing, use today's date.
+`
+      }),
+    }
+  );
+
+  const data = await response.json();
+
+  if (!data || !data[0] || !data[0].generated_text) {
+    return null;
+  }
+
+  const outputText = data[0].generated_text;
+
+  try {
+    return JSON.parse(outputText);
+  } catch (err) {
+    console.log("AI returned invalid JSON:", outputText);
+    return null;
+  }
+}
+
 app.post('/api/v1/telegram', async (req, res) => {
   if (req.method !== "POST") {
     return res.status(405).json({ message: "Method not allowed" });
@@ -67,22 +112,9 @@ app.post('/api/v1/telegram', async (req, res) => {
   const text = update.message.text.trim();
   const chatId = update.message.chat.id;
 
-  console.log("Raw text:", text);
-  console.log("Chat ID:", chatId);
+  const parsed = await parseWithAI(text);
 
-  // 🔹 Basic Parsing Logic
-  const parts = text.split(" ");
-  const amount = Number(parts[parts.length - 1]);
-  const title = parts.slice(0, -1).join(" ");
-
-  if (isNaN(amount)) {
-    console.log("Invalid format. Amount not found.");
-    return res.status(200).json({ status: "invalid format" });
-  }
-
-  console.log("Parsed Data:");
-  console.log("Title:", title);
-  console.log("Amount:", amount);
+  console.log("AI Parsed:", parsed);
 
   return res.status(200).json({ status: "parsed" });
 })
