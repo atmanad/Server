@@ -75,14 +75,19 @@ Return ONLY valid JSON in this format:
   "label": string,
   "date": "YYYY-MM-DD"
 }
-
 If date is missing, use today's date.
-`
+`,
+        parameters: {
+          max_new_tokens: 200,
+          temperature: 0.2
+        }
       }),
     }
   );
 
   const data = await response.json();
+
+  console.log("HF RAW RESPONSE:", JSON.stringify(data, null, 2));
 
   if (!data || !data[0] || !data[0].generated_text) {
     return null;
@@ -93,7 +98,7 @@ If date is missing, use today's date.
   try {
     return JSON.parse(outputText);
   } catch (err) {
-    console.log("AI returned invalid JSON:", outputText);
+    console.log("AI returned non-JSON:", outputText);
     return null;
   }
 }
