@@ -47,6 +47,7 @@ mongoose
 
 const dateStringToMonthYear = (dateString) => {
   const dateObject = new Date(dateString);
+
   return {
     month: dateObject.getMonth() + 1,
     year: dateObject.getFullYear()
