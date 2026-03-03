@@ -13,7 +13,8 @@ app.use(bodyParser.json());
 
 const allowedOrigins = [
   'https://spend-insight.netlify.app',
-  'https://10.1.0.4:3000'
+  'https://192.168.137.1:3000',
+  "https://localhost:3000"
 ];
 
 const corsOptions = {
@@ -52,6 +53,14 @@ const dateStringToMonthYear = (dateString) => {
   }
 }
 
+app.post('/api/v1/telegram', async (req, res) => {
+  if (req.method == 'POST') {
+    console.log('Telegram req received')
+    res.status(200).json({ status: 'ok' })
+  } else {
+    res.status(405).json({ error: 'Method not allowed' })
+  }
+})
 
 // ============================================ Transaction API =============================================================== //
 
@@ -111,7 +120,7 @@ app.post('/api/v1/transactions', async (req, res) => {
         expenses: [],
         categories: [],
         labels: []
-      }); 
+      });
     }
 
     // Find the expense for the given year and month within the user
