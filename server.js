@@ -56,7 +56,7 @@ const dateStringToMonthYear = (dateString) => {
 
 async function parseWithAI(text) {
   const response = await fetch(
-    "https://api-inference.huggingface.co/models/google/flan-t5-small",
+    "https://router.huggingface.co/hf-inference/models/google/flan-t5-small",
     {
       method: "POST",
       headers: {
@@ -76,6 +76,7 @@ Return ONLY valid JSON in this format:
   "label": string,
   "date": "YYYY-MM-DD"
 }
+
 If date is missing, use today's date.
 `,
         parameters: {
@@ -90,7 +91,7 @@ If date is missing, use today's date.
 
   console.log("HF RAW RESPONSE:", JSON.stringify(data, null, 2));
 
-  if (!data || !data[0] || !data[0].generated_text) {
+  if (!Array.isArray(data) || !data[0]?.generated_text) {
     return null;
   }
 
