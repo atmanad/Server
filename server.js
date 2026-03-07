@@ -84,10 +84,13 @@ Rules:
 
   const response = await fetch(url, {
     method: "POST",
-    headers: { "Content-Type": "application/json" },
+    headers: {
+      "Content-Type": "application/json",
+      "Connection": "close"  // <--- ADD THIS HEADER
+    },
     body: JSON.stringify({
       contents: [{ parts: [{ text: prompt }] }],
-      // Force the model to return clean JSON without markdown blocks
+      // (Optional but recommended) Force clean JSON response
       generationConfig: {
         responseMimeType: "application/json",
       }
