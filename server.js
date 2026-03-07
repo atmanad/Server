@@ -61,8 +61,7 @@ async function parseWithAI(text) {
     return null;
   }
 
-  const url = `https://generativelanguage.googleapis.com/v1/models/gemini-1.5-flash:generateContent?key=${apiKey}`;
-
+  const url = `https://generativelanguage.googleapis.com/v1/models/gemini-2.5-flash:generateContent?key=${apiKey}`;
   const prompt = `
 Extract expense details from this text: "${text}"
 
@@ -83,32 +82,28 @@ Rules:
 - date: extract date or relative date (e.g., "yesterday", "last friday"). If missing, use today's date.
 `;
 
+  const response = await fetch(url, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({
+      contents: [{ parts: [{ text: prompt }] }],
+      // Force the model to return clean JSON without markdown blocks
+      generationConfig: {
+        responseMimeType: "application/json",
+      }
+    }),
+  });
+
+  const data = await response.json();
+  let outputText = data.candidates?.[0]?.content?.parts?.[0]?.text;
+
+  if (!outputText) return null;
+
   try {
-    const response = await fetch(url, {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({
-        contents: [{ parts: [{ text: prompt }] }]
-      }),
-    });
-
-    const data = await response.json();
-    console.log("GEMINI RAW RESPONSE:", JSON.stringify(data, null, 2));
-
-    let outputText = data.candidates?.[0]?.content?.parts?.[0]?.text;
-    if (!outputText) return null;
-
-    // Remove potential markdown formatting (```json ... ```)
-    outputText = outputText.replace(/```json/g, "").replace(/```/g, "").trim();
-
-    try {
-      return JSON.parse(outputText);
-    } catch (err) {
-      console.error("AI returned invalid JSON:", outputText);
-      return null;
-    }
+    // You no longer need the regex replacement; it will parse directly!
+    return JSON.parse(outputText);
   } catch (err) {
-    console.error("AI parsing error:", err);
+    console.error("AI returned invalid JSON:", outputText);
     return null;
   }
 }
