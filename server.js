@@ -54,14 +54,53 @@ const dateStringToMonthYear = (dateString) => {
   }
 }
 
+async function saveTransaction(userId, transaction) {
+  const tDate = new Date(transaction.date);
+  const month = tDate.getMonth() + 1;
+  const year = tDate.getFullYear();
+
+  let user = await Users.findOne({ userId: userId });
+
+  if (!user) {
+    user = new Users({
+      userId: userId,
+      balance: 0,
+      expenses: [],
+      categories: [{ categoryName: 'Food' }, { categoryName: "Travel" }],
+      labels: []
+    });
+  }
+
+  let expense = user.expenses.find((exp) => exp.year === year && exp.month === month);
+
+  if (!expense) {
+    expense = {
+      year: year,
+      month: month,
+      transactions: [],
+      savings: 0,
+      income: []
+    };
+    user.expenses.push(expense);
+    // Find the newly pushed expense to work with the reference
+    expense = user.expenses[user.expenses.length - 1];
+  }
+
+  expense.transactions.push(transaction);
+  expense.savings -= Number(transaction.amount);
+  user.balance -= Number(transaction.amount);
+
+  await user.save();
+  return user;
+}
+
 async function parseWithAI(text) {
-  const apiKey = process.env.GOOGLE_API_KEY;
-  if (!apiKey || apiKey === 'your_gemini_api_key_here') {
-    console.error("GOOGLE_API_KEY is missing or not set in .env");
+  const apiKey = process.env.GROQ_API_KEY;
+  if (!apiKey) {
+    console.error("GROQ_API_KEY is missing in .env");
     return null;
   }
 
-  const url = `https://generativelanguage.googleapis.com/v1/models/gemini-2.5-flash:generateContent?key=${apiKey}`;
   const prompt = `
 Extract expense details from this text: "${text}"
 
@@ -72,65 +111,147 @@ Return ONLY valid JSON in this format:
   "amount": number,
   "category": string,
   "label": string,
-  "date": "YYYY-MM-DD"
+  "date": "YYYY-MM-DD",
+  "notes": string
 }
 
 Rules:
 - amount: numerical value
 - category: one of [Food, Travel, Entertainment, Shopping, Health, Bills, Others]
-- label: short description (e.g., "uber", "pizza")
+- label: home/personal
 - date: extract date or relative date (e.g., "yesterday", "last friday"). If missing, use today's date.
+- notes: any additional information about the transaction
 `;
 
-  const response = await fetch(url, {
-    method: "POST",
-    headers: {
-      "Content-Type": "application/json",
-      "Connection": "close"  // <--- ADD THIS HEADER
-    },
-    body: JSON.stringify({
-      contents: [{ parts: [{ text: prompt }] }],
-      // (Optional but recommended) Force clean JSON response
-      generationConfig: {
-        responseMimeType: "application/json",
-      }
-    }),
-  });
-
-  const data = await response.json();
-  let outputText = data.candidates?.[0]?.content?.parts?.[0]?.text;
-
-  if (!outputText) return null;
-
   try {
-    // You no longer need the regex replacement; it will parse directly!
-    return JSON.parse(outputText);
+    const response = await fetch("https://api.groq.com/openai/v1/chat/completions", {
+      method: "POST",
+      headers: {
+        "Authorization": `Bearer ${apiKey}`,
+        "Content-Type": "application/json"
+      },
+      body: JSON.stringify({
+        model: "llama-3.3-70b-versatile",
+        messages: [
+          {
+            role: "system",
+            content: "You are a helpful assistant that extracts expense details. You must respond ONLY with the JSON object."
+          },
+          {
+            role: "user",
+            content: prompt
+          }
+        ],
+        response_format: { type: "json_object" },
+        temperature: 0.1
+      }),
+    });
+
+    const data = await response.json();
+
+    if (data.error) {
+      console.error("GROQ API ERROR:", JSON.stringify(data.error, null, 2));
+      return null;
+    }
+
+    let outputText = data.choices?.[0]?.message?.content;
+    if (!outputText) {
+      console.log("GROQ RESPONSE (Empty):", JSON.stringify(data, null, 2));
+      return null;
+    }
+
+    try {
+      return JSON.parse(outputText);
+    } catch (err) {
+      console.error("Groq returned invalid JSON:", outputText);
+      return null;
+    }
   } catch (err) {
-    console.error("AI returned invalid JSON:", outputText);
+    console.error("Groq parsing error:", err);
     return null;
   }
 }
 
+
+async function sendMessageToTelegram(chatId, text) {
+  const botToken = process.env.TELEGRAM_BOT_TOKEN;
+  if (!botToken) {
+    console.error("TELEGRAM_BOT_TOKEN is missing in .env");
+    return;
+  }
+  const url = `https://api.telegram.org/bot${botToken}/sendMessage`;
+  try {
+    await fetch(url, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ chat_id: chatId, text: text })
+    });
+  } catch (err) {
+    console.error("Error sending Telegram message:", err);
+  }
+}
 
 app.post('/api/v1/telegram', async (req, res) => {
   if (req.method !== "POST") {
     return res.status(405).json({ message: "Method not allowed" });
   }
 
-  const text = req.body?.message?.text;
+  const message = req.body?.message;
+  const text = message?.text;
+  const chatId = message?.chat?.id;
 
   // ✅ Immediately respond to Telegram
   res.status(200).json({ status: "received" });
 
-  // 🔥 Process AI in background (do not await)
-  if (text) {
-    parseWithAI(text)
-      .then(result => {
-        console.log("AI RESULT:", result);
-      })
-      .catch(err => {
-        console.error("AI ERROR:", err);
+  if (!text || !chatId) return;
+
+  // 1. Handle Commands
+  if (text.startsWith('/link ')) {
+    const code = text.split(' ')[1]?.toUpperCase();
+    if (!code) {
+      return sendMessageToTelegram(chatId, "Please provide the 5-letter code. Format: /link ABCDE");
+    }
+
+    try {
+      const user = await Users.findOne({
+        telegramLinkingCode: code,
+        telegramLinkingCodeExpires: { $gt: new Date() }
       });
+
+      if (!user) {
+        return sendMessageToTelegram(chatId, "Invalid or expired code. Please generate a new one from the dashboard.");
+      }
+
+      user.telegramId = chatId.toString();
+      user.telegramLinkingCode = null; // Clear code after use
+      user.telegramLinkingCodeExpires = null;
+      await user.save();
+
+      return sendMessageToTelegram(chatId, "Account linked successfully! You can now send your expenses here.");
+    } catch (err) {
+      console.error("Linking error:", err);
+      return sendMessageToTelegram(chatId, "An error occurred during linking. Please try again later.");
+    }
+  }
+
+  // 2. Handle Expenses
+  try {
+    const user = await Users.findOne({ telegramId: chatId.toString() });
+    if (!user) {
+      return sendMessageToTelegram(chatId, "Your account is not linked. Please go to the dashboard to connect to Telegram.");
+    }
+
+    const result = await parseWithAI(text);
+    console.log("AI RESULT:", result);
+
+    if (result && result.amount) {
+      await saveTransaction(user.userId, result);
+      return sendMessageToTelegram(chatId, `Added: ${result.amount} for ${result.notes || result.label} (${result.category}) on ${result.date}`);
+    } else {
+      return sendMessageToTelegram(chatId, "Sorry, I couldn't understand that expense. Try: 'uber 200 today' or 'coffee 5.5'");
+    }
+  } catch (err) {
+    console.error("Telegram webhook error:", err);
   }
 })
 
@@ -177,46 +298,7 @@ app.get('/api/v1/transactions', async (req, res) => {
 app.post('/api/v1/transactions', async (req, res) => {
   try {
     const { userId, transaction } = req.body;
-    const tDate = new Date(transaction.date);
-    const month = tDate.getMonth() + 1;
-    const year = tDate.getFullYear();
-
-    // Find the user by ID
-    let user = await Users.findOne({ userId: userId });
-
-    // If user not found, create a new user document 
-    if (!user) {
-      user = new Users({
-        userId: userId,
-        balance: 0,
-        expenses: [],
-        categories: [],
-        labels: []
-      });
-    }
-
-    // Find the expense for the given year and month within the user
-    let expense = user.expenses.find((exp) => exp.year === year && exp.month === month);
-
-    // If expense not found, create a new expense for the given year and month
-    if (!expense) {
-      expense = {
-        year: year,
-        month: month,
-        transactions: [transaction],
-        savings: -Number(transaction.amount),
-        income: []
-      };
-      user.expenses.push(expense);
-    }
-    // Add the transaction to the expense & total balance
-    expense.transactions.push(transaction);
-    expense.savings -= Number(transaction.amount);
-    user.balance -= Number(transaction.amount);
-
-    // Save the updated user document
-    await user.save();
-
+    await saveTransaction(userId, transaction);
     res.sendStatus(200);
   } catch (error) {
     console.error('Error inserting transaction:', error);
@@ -513,6 +595,37 @@ app.get('/api/v1/user', async (req, res) => {
 
   } catch (error) {
     console.error('Error fetching MonthlySummary:', error);
+    res.sendStatus(500);
+  }
+});
+
+// Generate a 5-letter linking code for Telegram
+app.get('/api/v1/user/linking-code', async (req, res) => {
+  try {
+    const { userId } = req.query;
+    if (!userId) return res.status(400).json({ error: 'userId is required' });
+
+    const code = Math.random().toString(36).substring(2, 7).toUpperCase();
+    const expires = new Date(Date.now() + 10 * 60 * 1000); // 10 minutes from now
+
+    let user = await Users.findOne({ userId: userId });
+    if (!user) {
+      user = new Users({
+        userId: userId,
+        balance: 0,
+        expenses: [],
+        categories: [{ categoryName: 'Food' }, { categoryName: "Travel" }],
+        labels: []
+      });
+    }
+
+    user.telegramLinkingCode = code;
+    user.telegramLinkingCodeExpires = expires;
+    await user.save();
+
+    res.json({ code });
+  } catch (error) {
+    console.error('Error generating linking code:', error);
     res.sendStatus(500);
   }
 });
