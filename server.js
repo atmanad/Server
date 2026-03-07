@@ -88,18 +88,25 @@ Rules:
       method: "POST",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({
-        contents: [{ parts: [{ text: prompt }] }],
-        generationConfig: { response_mime_type: "application/json" }
+        contents: [{ parts: [{ text: prompt }] }]
       }),
     });
 
     const data = await response.json();
     console.log("GEMINI RAW RESPONSE:", JSON.stringify(data, null, 2));
 
-    const outputText = data.candidates?.[0]?.content?.parts?.[0]?.text;
+    let outputText = data.candidates?.[0]?.content?.parts?.[0]?.text;
     if (!outputText) return null;
 
-    return JSON.parse(outputText);
+    // Remove potential markdown formatting (```json ... ```)
+    outputText = outputText.replace(/```json/g, "").replace(/```/g, "").trim();
+
+    try {
+      return JSON.parse(outputText);
+    } catch (err) {
+      console.error("AI returned invalid JSON:", outputText);
+      return null;
+    }
   } catch (err) {
     console.error("AI parsing error:", err);
     return null;
