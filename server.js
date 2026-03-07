@@ -55,19 +55,18 @@ const dateStringToMonthYear = (dateString) => {
 }
 
 async function parseWithAI(text) {
-  const response = await fetch(
-    "https://router.huggingface.co/hf-inference/models/google/flan-t5-small",
-    {
-      method: "POST",
-      headers: {
-        Authorization: `Bearer ${process.env.HF_TOKEN}`,
-        "Content-Type": "application/json",
-      },
-      body: JSON.stringify({
-        inputs: `
-Extract expense details from this text:
+  const apiKey = process.env.GOOGLE_API_KEY;
+  if (!apiKey || apiKey === 'your_gemini_api_key_here') {
+    console.error("GOOGLE_API_KEY is missing or not set in .env");
+    return null;
+  }
 
-"${text}"
+  const url = `https://generativelanguage.googleapis.com/v1beta/models/gemini-1.5-flash:generateContent?key=${apiKey}`;
+
+  const prompt = `
+Extract expense details from this text: "${text}"
+
+Current Date: ${new Date().toISOString().split('T')[0]}
 
 Return ONLY valid JSON in this format:
 {
@@ -77,33 +76,36 @@ Return ONLY valid JSON in this format:
   "date": "YYYY-MM-DD"
 }
 
-If date is missing, use today's date.
-`,
-        parameters: {
-          max_new_tokens: 200,
-          temperature: 0.2
-        }
-      }),
-    }
-  );
-
-  const data = await response.json();
-
-  console.log("HF RAW RESPONSE:", JSON.stringify(data, null, 2));
-
-  if (!Array.isArray(data) || !data[0]?.generated_text) {
-    return null;
-  }
-
-  const outputText = data[0].generated_text;
+Rules:
+- amount: numerical value
+- category: one of [Food, Travel, Entertainment, Shopping, Health, Bills, Others]
+- label: short description (e.g., "uber", "pizza")
+- date: extract date or relative date (e.g., "yesterday", "last friday"). If missing, use today's date.
+`;
 
   try {
+    const response = await fetch(url, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        contents: [{ parts: [{ text: prompt }] }],
+        generationConfig: { response_mime_type: "application/json" }
+      }),
+    });
+
+    const data = await response.json();
+    console.log("GEMINI RAW RESPONSE:", JSON.stringify(data, null, 2));
+
+    const outputText = data.candidates?.[0]?.content?.parts?.[0]?.text;
+    if (!outputText) return null;
+
     return JSON.parse(outputText);
   } catch (err) {
-    console.log("AI returned non-JSON:", outputText);
+    console.error("AI parsing error:", err);
     return null;
   }
 }
+
 
 app.post('/api/v1/telegram', async (req, res) => {
   if (req.method !== "POST") {
