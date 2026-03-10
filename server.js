@@ -6,7 +6,8 @@ const mongoose = require('mongoose');
 const Users = require('./model');
 const bodyParser = require('body-parser');
 require('dotenv').config();
-const { MONGODB_URI } = process.env
+const { MONGODB_URI } = process.env;
+const telegramService = require('./telegramService');
 
 // Parse JSON bodies
 app.use(bodyParser.json());
@@ -94,188 +95,20 @@ async function saveTransaction(userId, transaction) {
   return user;
 }
 
-async function parseWithAI(text) {
-  const apiKey = process.env.GROQ_API_KEY;
-  if (!apiKey) {
-    console.error("GROQ_API_KEY is missing in .env");
-    return null;
-  }
 
-  const prompt = `
-Extract expense details from this text: "${text}"
-
-Current Date: ${new Date().toISOString().split('T')[0]}
-
-Return ONLY valid JSON in this format:
-{
-  "amount": number,
-  "category": string,
-  "label": string,
-  "date": "YYYY-MM-DD",
-  "notes": string
-}
-
-Rules:
-- amount: numerical value
-- category: one of [Food, Travel, Entertainment, Shopping, Health, Bills, Others, Home, Personal, BBS, Recharge, D, S]
-- label: home/personal
-- date: extract date or relative date (e.g., "yesterday", "last friday"). If missing, use today's date.
-- notes: any additional information about the transaction
-`;
-
-  try {
-    const response = await fetch("https://api.groq.com/openai/v1/chat/completions", {
-      method: "POST",
-      headers: {
-        "Authorization": `Bearer ${apiKey}`,
-        "Content-Type": "application/json"
-      },
-      body: JSON.stringify({
-        model: "llama-3.3-70b-versatile",
-        messages: [
-          {
-            role: "system",
-            content: "You are a helpful assistant that extracts expense details. You must respond ONLY with the JSON object."
-          },
-          {
-            role: "user",
-            content: prompt
-          }
-        ],
-        response_format: { type: "json_object" },
-        temperature: 0.1
-      }),
-    });
-
-    const data = await response.json();
-
-    if (data.error) {
-      console.error("GROQ API ERROR:", JSON.stringify(data.error, null, 2));
-      return null;
-    }
-
-    let outputText = data.choices?.[0]?.message?.content;
-    if (!outputText) {
-      console.log("GROQ RESPONSE (Empty):", JSON.stringify(data, null, 2));
-      return null;
-    }
-
-    try {
-      return JSON.parse(outputText);
-    } catch (err) {
-      console.error("Groq returned invalid JSON:", outputText);
-      return null;
-    }
-  } catch (err) {
-    console.error("Groq parsing error:", err);
-    return null;
-  }
-}
-
-
-async function sendMessageToTelegram(chatId, text) {
-  const botToken = process.env.TELEGRAM_BOT_TOKEN;
-  if (!botToken) {
-    console.error("TELEGRAM_BOT_TOKEN is missing in .env");
-    return;
-  }
-  const url = `https://api.telegram.org/bot${botToken}/sendMessage`;
-  try {
-    await fetch(url, {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ chat_id: chatId, text: text })
-    });
-  } catch (err) {
-    console.error("Error sending Telegram message:", err);
-  }
-}
-
-async function sendChatAction(chatId, action = 'typing') {
-  const botToken = process.env.TELEGRAM_BOT_TOKEN;
-  if (!botToken) {
-    console.error("TELEGRAM_BOT_TOKEN is missing in .env");
-    return;
-  }
-  const url = `https://api.telegram.org/bot${botToken}/sendChatAction`;
-  try {
-    await fetch(url, {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ chat_id: chatId, action: action })
-    });
-  } catch (err) {
-    console.error("Error sending Telegram chat action:", err);
-  }
-}
+// --- Telegram helper functions moved to telegramService.js ---
 
 app.post('/api/v1/telegram', async (req, res) => {
-  if (req.method !== "POST") {
-    return res.status(405).json({ message: "Method not allowed" });
-  }
-
   const message = req.body?.message;
-  const text = message?.text;
-  const chatId = message?.chat?.id;
-
-  // ✅ Immediately respond to Telegram to avoid timeouts
+  // Immediately respond to Telegram to prevent timeouts and re-deliveries
   res.status(200).json({ status: "received" });
 
-  if (!text || !chatId) return;
-
-  // 1. Handle Commands
-  if (text.startsWith('/link ')) {
-    const code = text.split(' ')[1]?.toUpperCase();
-    if (!code) {
-      return sendMessageToTelegram(chatId, "Please provide the 5-letter code. Format: /link ABCDE");
-    }
-
-    try {
-      const user = await Users.findOne({
-        telegramLinkingCode: code,
-        telegramLinkingCodeExpires: { $gt: new Date() }
-      });
-
-      if (!user) {
-        return sendMessageToTelegram(chatId, "Invalid or expired code. Please generate a new one from the dashboard.");
-      }
-
-      user.telegramId = chatId.toString();
-      user.telegramLinkingCode = null; // Clear code after use
-      user.telegramLinkingCodeExpires = null;
-      await user.save();
-
-      return sendMessageToTelegram(chatId, "Account linked successfully! You can now send your expenses here.");
-    } catch (err) {
-      console.error("Linking error:", err);
-      return sendMessageToTelegram(chatId, "An error occurred during linking. Please try again later.");
-    }
+  if (message) {
+    // Process asynchronously to improve responsiveness
+    telegramService.handleUpdate(message, saveTransaction)
+      .catch(err => console.error("Error in Telegram processing:", err));
   }
-
-  // 2. Handle Expenses
-  try {
-    const user = await Users.findOne({ telegramId: chatId.toString() });
-    if (!user) {
-      return sendMessageToTelegram(chatId, "Your account is not linked. Please go to the dashboard to connect to Telegram.");
-    }
-
-    // Show "typing..." immediately
-    await sendChatAction(chatId, 'typing');
-
-    const result = await parseWithAI(text);
-    console.log("AI RESULT:", result);
-
-    if (result && result.amount) {
-      await saveTransaction(user.userId, result);
-      return sendMessageToTelegram(chatId, `✅ Added: ${result.amount} for ${result.notes || result.label || result.category} (${result.category}) on ${result.date}`);
-    } else {
-      return sendMessageToTelegram(chatId, "❌ Sorry, I couldn't understand that expense. Try: 'uber 200 today' or 'coffee 5.5'");
-    }
-  } catch (err) {
-    console.error("Telegram webhook error:", err);
-    return sendMessageToTelegram(chatId, "⚠️ Oops! Something went wrong while processing your request. Please try again later.");
-  }
-})
+});
 
 // ============================================ Transaction API =============================================================== //
 
