@@ -117,7 +117,7 @@ Return ONLY valid JSON in this format:
 
 Rules:
 - amount: numerical value
-- category: one of [Food, Travel, Entertainment, Shopping, Health, Bills, Others]
+- category: one of [Food, Travel, Entertainment, Shopping, Health, Bills, Others, Home, Personal, BBS, Recharge, D, S]
 - label: home/personal
 - date: extract date or relative date (e.g., "yesterday", "last friday"). If missing, use today's date.
 - notes: any additional information about the transaction
@@ -191,6 +191,24 @@ async function sendMessageToTelegram(chatId, text) {
   }
 }
 
+async function sendChatAction(chatId, action = 'typing') {
+  const botToken = process.env.TELEGRAM_BOT_TOKEN;
+  if (!botToken) {
+    console.error("TELEGRAM_BOT_TOKEN is missing in .env");
+    return;
+  }
+  const url = `https://api.telegram.org/bot${botToken}/sendChatAction`;
+  try {
+    await fetch(url, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ chat_id: chatId, action: action })
+    });
+  } catch (err) {
+    console.error("Error sending Telegram chat action:", err);
+  }
+}
+
 app.post('/api/v1/telegram', async (req, res) => {
   if (req.method !== "POST") {
     return res.status(405).json({ message: "Method not allowed" });
@@ -200,7 +218,7 @@ app.post('/api/v1/telegram', async (req, res) => {
   const text = message?.text;
   const chatId = message?.chat?.id;
 
-  // ✅ Immediately respond to Telegram
+  // ✅ Immediately respond to Telegram to avoid timeouts
   res.status(200).json({ status: "received" });
 
   if (!text || !chatId) return;
@@ -241,17 +259,21 @@ app.post('/api/v1/telegram', async (req, res) => {
       return sendMessageToTelegram(chatId, "Your account is not linked. Please go to the dashboard to connect to Telegram.");
     }
 
+    // Show "typing..." immediately
+    await sendChatAction(chatId, 'typing');
+
     const result = await parseWithAI(text);
     console.log("AI RESULT:", result);
 
     if (result && result.amount) {
       await saveTransaction(user.userId, result);
-      return sendMessageToTelegram(chatId, `Added: ${result.amount} for ${result.notes || result.label} (${result.category}) on ${result.date}`);
+      return sendMessageToTelegram(chatId, `✅ Added: ${result.amount} for ${result.notes || result.label || result.category} (${result.category}) on ${result.date}`);
     } else {
-      return sendMessageToTelegram(chatId, "Sorry, I couldn't understand that expense. Try: 'uber 200 today' or 'coffee 5.5'");
+      return sendMessageToTelegram(chatId, "❌ Sorry, I couldn't understand that expense. Try: 'uber 200 today' or 'coffee 5.5'");
     }
   } catch (err) {
     console.error("Telegram webhook error:", err);
+    return sendMessageToTelegram(chatId, "⚠️ Oops! Something went wrong while processing your request. Please try again later.");
   }
 })
 
