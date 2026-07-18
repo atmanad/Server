@@ -6,7 +6,8 @@ const mongoose = require('mongoose');
 const Users = require('./model');
 const bodyParser = require('body-parser');
 require('dotenv').config();
-const { MONGODB_URI } = process.env
+const { MONGODB_URI } = process.env;
+const telegramService = require('./telegramService');
 
 // Parse JSON bodies
 app.use(bodyParser.json());
@@ -54,78 +55,60 @@ const dateStringToMonthYear = (dateString) => {
   }
 }
 
-async function parseWithAI(text) {
-  const response = await fetch(
-    "https://router.huggingface.co/hf-inference/models/google/flan-t5-small",
-    {
-      method: "POST",
-      headers: {
-        Authorization: `Bearer ${process.env.HF_TOKEN}`,
-        "Content-Type": "application/json",
-      },
-      body: JSON.stringify({
-        inputs: `
-Extract expense details from this text:
+async function saveTransaction(userId, transaction) {
+  const tDate = new Date(transaction.date);
+  const month = tDate.getMonth() + 1;
+  const year = tDate.getFullYear();
 
-"${text}"
+  let user = await Users.findOne({ userId: userId });
 
-Return ONLY valid JSON in this format:
-{
-  "amount": number,
-  "category": string,
-  "label": string,
-  "date": "YYYY-MM-DD"
-}
-
-If date is missing, use today's date.
-`,
-        parameters: {
-          max_new_tokens: 200,
-          temperature: 0.2
-        }
-      }),
-    }
-  );
-
-  const data = await response.json();
-
-  console.log("HF RAW RESPONSE:", JSON.stringify(data, null, 2));
-
-  if (!Array.isArray(data) || !data[0]?.generated_text) {
-    return null;
+  if (!user) {
+    user = new Users({
+      userId: userId,
+      balance: 0,
+      expenses: [],
+      categories: [{ categoryName: 'Food' }, { categoryName: "Travel" }],
+      labels: []
+    });
   }
 
-  const outputText = data[0].generated_text;
+  let expense = user.expenses.find((exp) => exp.year === year && exp.month === month);
 
-  try {
-    return JSON.parse(outputText);
-  } catch (err) {
-    console.log("AI returned non-JSON:", outputText);
-    return null;
+  if (!expense) {
+    expense = {
+      year: year,
+      month: month,
+      transactions: [],
+      savings: 0,
+      income: []
+    };
+    user.expenses.push(expense);
+    // Find the newly pushed expense to work with the reference
+    expense = user.expenses[user.expenses.length - 1];
   }
+
+  expense.transactions.push(transaction);
+  expense.savings -= Number(transaction.amount);
+  user.balance -= Number(transaction.amount);
+
+  await user.save();
+  return user;
 }
+
+
+// --- Telegram helper functions moved to telegramService.js ---
 
 app.post('/api/v1/telegram', async (req, res) => {
-  if (req.method !== "POST") {
-    return res.status(405).json({ message: "Method not allowed" });
-  }
-
-  const text = req.body?.message?.text;
-
-  // ✅ Immediately respond to Telegram
+  const message = req.body?.message;
+  // Immediately respond to Telegram to prevent timeouts and re-deliveries
   res.status(200).json({ status: "received" });
 
-  // 🔥 Process AI in background (do not await)
-  if (text) {
-    parseWithAI(text)
-      .then(result => {
-        console.log("AI RESULT:", result);
-      })
-      .catch(err => {
-        console.error("AI ERROR:", err);
-      });
+  if (message) {
+    // Process asynchronously to improve responsiveness
+    telegramService.handleUpdate(message, saveTransaction)
+      .catch(err => console.error("Error in Telegram processing:", err));
   }
-})
+});
 
 // ============================================ Transaction API =============================================================== //
 
@@ -170,46 +153,7 @@ app.get('/api/v1/transactions', async (req, res) => {
 app.post('/api/v1/transactions', async (req, res) => {
   try {
     const { userId, transaction } = req.body;
-    const tDate = new Date(transaction.date);
-    const month = tDate.getMonth() + 1;
-    const year = tDate.getFullYear();
-
-    // Find the user by ID
-    let user = await Users.findOne({ userId: userId });
-
-    // If user not found, create a new user document 
-    if (!user) {
-      user = new Users({
-        userId: userId,
-        balance: 0,
-        expenses: [],
-        categories: [],
-        labels: []
-      });
-    }
-
-    // Find the expense for the given year and month within the user
-    let expense = user.expenses.find((exp) => exp.year === year && exp.month === month);
-
-    // If expense not found, create a new expense for the given year and month
-    if (!expense) {
-      expense = {
-        year: year,
-        month: month,
-        transactions: [transaction],
-        savings: -Number(transaction.amount),
-        income: []
-      };
-      user.expenses.push(expense);
-    }
-    // Add the transaction to the expense & total balance
-    expense.transactions.push(transaction);
-    expense.savings -= Number(transaction.amount);
-    user.balance -= Number(transaction.amount);
-
-    // Save the updated user document
-    await user.save();
-
+    await saveTransaction(userId, transaction);
     res.sendStatus(200);
   } catch (error) {
     console.error('Error inserting transaction:', error);
@@ -506,6 +450,37 @@ app.get('/api/v1/user', async (req, res) => {
 
   } catch (error) {
     console.error('Error fetching MonthlySummary:', error);
+    res.sendStatus(500);
+  }
+});
+
+// Generate a 5-letter linking code for Telegram
+app.get('/api/v1/user/linking-code', async (req, res) => {
+  try {
+    const { userId } = req.query;
+    if (!userId) return res.status(400).json({ error: 'userId is required' });
+
+    const code = Math.random().toString(36).substring(2, 7).toUpperCase();
+    const expires = new Date(Date.now() + 10 * 60 * 1000); // 10 minutes from now
+
+    let user = await Users.findOne({ userId: userId });
+    if (!user) {
+      user = new Users({
+        userId: userId,
+        balance: 0,
+        expenses: [],
+        categories: [{ categoryName: 'Food' }, { categoryName: "Travel" }],
+        labels: []
+      });
+    }
+
+    user.telegramLinkingCode = code;
+    user.telegramLinkingCodeExpires = expires;
+    await user.save();
+
+    res.json({ code });
+  } catch (error) {
+    console.error('Error generating linking code:', error);
     res.sendStatus(500);
   }
 });

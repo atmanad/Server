@@ -25,6 +25,9 @@ const usersSchema = new mongoose.Schema({
     expenses: [expenseSchema],
     categories: { type: [{ categoryName: String }], default: [] },
     labels: { type: [{ labelName: String }], default: [] },
+    telegramId: { type: String },
+    telegramLinkingCode: { type: String },
+    telegramLinkingCodeExpires: { type: Date },
 });
 
 
