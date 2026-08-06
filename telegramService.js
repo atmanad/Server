@@ -169,11 +169,7 @@ async function parseImageWithAI(base64ImageUrl, captionText) {
         return [];
     }
 
-    const promptText = `
-Extract all expense details from this image/receipt.
-${captionText ? `Additional context from user: "${captionText}"` : ''}
-
-Current Date: ${new Date().toISOString().split('T')[0]}
+    const systemPrompt = `Extract all expense details from this image/receipt.
 
 Return ONLY valid JSON in this format:
 {
@@ -194,8 +190,7 @@ Rules:
 - label: home/personal
 - date: extract transaction date or relative date. If missing on receipt/image, use today's date (${new Date().toISOString().split('T')[0]}).
 - notes: item description, store/vendor name, or line item details.
-- Extract all separate expense items if it's an itemized receipt or list of expenses.
-`;
+- Extract all separate expense items if it's an itemized receipt or list of expenses.`;
 
     try {
         const response = await fetch("https://api.groq.com/openai/v1/chat/completions", {
@@ -209,12 +204,15 @@ Rules:
                 messages: [
                     {
                         role: "system",
-                        content: "You are an expert financial AI that parses receipts and bill images into structured expense JSON data."
+                        content: systemPrompt
                     },
                     {
                         role: "user",
                         content: [
-                            { type: "text", text: promptText },
+                            {
+                                type: "text",
+                                text: captionText || "extract expense details"
+                            },
                             {
                                 type: "image_url",
                                 image_url: {
@@ -224,8 +222,9 @@ Rules:
                         ]
                     }
                 ],
-                response_format: { type: "json_object" },
-                temperature: 0.1
+                temperature: 0.6,
+                max_completion_tokens: 2048,
+                top_p: 0.95
             }),
         });
 
@@ -244,8 +243,13 @@ Rules:
             return [];
         }
 
+        let cleanText = outputText.trim();
+        if (cleanText.startsWith("```")) {
+            cleanText = cleanText.replace(/^```(?:json)?\s*/i, "").replace(/\s*```$/i, "").trim();
+        }
+
         try {
-            const parsed = JSON.parse(outputText);
+            const parsed = JSON.parse(cleanText);
             console.log("[DEBUG] [parseImageWithAI] Successfully parsed JSON:", parsed);
             return normalizeExpenses(parsed);
         } catch (err) {
