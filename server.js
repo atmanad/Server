@@ -86,10 +86,10 @@ const dateStringToMonthYear = (dateString) => {
   }
 }
 
-async function saveTransaction(userId, transaction) {
-  const tDate = new Date(transaction.date);
-  const month = tDate.getMonth() + 1;
-  const year = tDate.getFullYear();
+async function saveTransaction(userId, transactionOrTransactions) {
+  const transactions = Array.isArray(transactionOrTransactions)
+    ? transactionOrTransactions
+    : [transactionOrTransactions];
 
   let user = await Users.findOne({ userId: userId });
 
@@ -103,24 +103,32 @@ async function saveTransaction(userId, transaction) {
     });
   }
 
-  let expense = user.expenses.find((exp) => exp.year === year && exp.month === month);
+  for (const transaction of transactions) {
+    if (!transaction || (typeof transaction.amount !== 'number' && isNaN(Number(transaction.amount)))) {
+      continue;
+    }
 
-  if (!expense) {
-    expense = {
-      year: year,
-      month: month,
-      transactions: [],
-      savings: 0,
-      income: []
-    };
-    user.expenses.push(expense);
-    // Find the newly pushed expense to work with the reference
-    expense = user.expenses[user.expenses.length - 1];
+    const tDate = new Date(transaction.date || new Date().toISOString().split('T')[0]);
+    const month = tDate.getMonth() + 1;
+    const year = tDate.getFullYear();
+
+    let expense = user.expenses.find((exp) => exp.year === year && exp.month === month);
+
+    if (!expense) {
+      user.expenses.push({
+        year: year,
+        month: month,
+        transactions: [],
+        savings: 0,
+        income: []
+      });
+      expense = user.expenses[user.expenses.length - 1];
+    }
+
+    expense.transactions.push(transaction);
+    expense.savings -= Number(transaction.amount);
+    user.balance -= Number(transaction.amount);
   }
-
-  expense.transactions.push(transaction);
-  expense.savings -= Number(transaction.amount);
-  user.balance -= Number(transaction.amount);
 
   await user.save();
   return user;

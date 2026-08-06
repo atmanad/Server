@@ -1,11 +1,77 @@
 const Users = require('./model');
 
+/**
+ * Fetch image file from Telegram Bot API and convert to Base64 Data URL.
+ * @param {string} fileId 
+ * @returns {Promise<string|null>}
+ */
+async function getTelegramImageBase64(fileId) {
+    const botToken = process.env.TELEGRAM_BOT_TOKEN;
+    if (!botToken) {
+        console.error("[DEBUG] [getTelegramImageBase64] TELEGRAM_BOT_TOKEN is missing in .env");
+        return null;
+    }
+
+    try {
+        console.log(`[DEBUG] [getTelegramImageBase64] Getting file path for fileId: ${fileId}`);
+        const getFileUrl = `https://api.telegram.org/bot${botToken}/getFile?file_id=${fileId}`;
+        const fileRes = await fetch(getFileUrl);
+        const fileData = await fileRes.json();
+
+        if (!fileData.ok || !fileData.result?.file_path) {
+            console.error("[DEBUG] [getTelegramImageBase64] Telegram getFile failed:", fileData);
+            return null;
+        }
+
+        const filePath = fileData.result.file_path;
+        console.log(`[DEBUG] [getTelegramImageBase64] File path obtained: ${filePath}. Downloading file...`);
+
+        const downloadUrl = `https://api.telegram.org/file/bot${botToken}/${filePath}`;
+        const imgRes = await fetch(downloadUrl);
+        const arrayBuffer = await imgRes.arrayBuffer();
+
+        const base64 = Buffer.from(arrayBuffer).toString('base64');
+        const ext = filePath.split('.').pop()?.toLowerCase();
+        let mimeType = 'image/jpeg';
+        if (ext === 'png') mimeType = 'image/png';
+        if (ext === 'webp') mimeType = 'image/webp';
+
+        return `data:${mimeType};base64,${base64}`;
+    } catch (err) {
+        console.error("[DEBUG] [getTelegramImageBase64] Exception during image download/conversion:", err);
+        return null;
+    }
+}
+
+/**
+ * Helper to ensure parsed result always returns an array of valid expense objects.
+ */
+function normalizeExpenses(parsed) {
+    if (!parsed) return [];
+
+    let list = [];
+    if (Array.isArray(parsed)) {
+        list = parsed;
+    } else if (Array.isArray(parsed.expenses)) {
+        list = parsed.expenses;
+    } else if (parsed.amount) {
+        list = [parsed];
+    }
+
+    return list.filter(item => item && (typeof item.amount === 'number' || !isNaN(Number(item.amount))) && Number(item.amount) > 0);
+}
+
+/**
+ * Parse text input with Groq AI to extract expenses.
+ * @param {string} text 
+ * @returns {Promise<Array>}
+ */
 async function parseWithAI(text) {
     console.log(`[DEBUG] [parseWithAI] Parsing text: "${text}"`);
     const apiKey = process.env.GROQ_API_KEY;
     if (!apiKey) {
         console.error("[DEBUG] [parseWithAI] GROQ_API_KEY is missing in .env");
-        return null;
+        return [];
     }
 
     const prompt = `
@@ -15,11 +81,15 @@ Current Date: ${new Date().toISOString().split('T')[0]}
 
 Return ONLY valid JSON in this format:
 {
-  "amount": number,
-  "category": string,
-  "label": string,
-  "date": "YYYY-MM-DD",
-  "notes": string
+  "expenses": [
+    {
+      "amount": number,
+      "category": string,
+      "label": string,
+      "date": "YYYY-MM-DD",
+      "notes": string
+    }
+  ]
 }
 
 Rules:
@@ -28,6 +98,7 @@ Rules:
 - label: home/personal
 - date: extract date or relative date (e.g., "yesterday", "last friday"). If missing, use today's date.
 - notes: any additional information about the transaction
+- Extract all separate expenses if text mentions multiple items.
 `;
 
     try {
@@ -43,7 +114,7 @@ Rules:
                 messages: [
                     {
                         role: "system",
-                        content: "You are a helpful assistant that extracts expense details. You must respond ONLY with the JSON object."
+                        content: "You are a helpful assistant that extracts expense details into structured JSON."
                     },
                     {
                         role: "user",
@@ -61,26 +132,129 @@ Rules:
 
         if (data.error) {
             console.error("[DEBUG] [parseWithAI] GROQ API ERROR:", JSON.stringify(data.error, null, 2));
-            return null;
+            return [];
         }
 
         let outputText = data.choices?.[0]?.message?.content;
         if (!outputText) {
             console.log("[DEBUG] [parseWithAI] GROQ RESPONSE (Empty Content):", JSON.stringify(data, null, 2));
-            return null;
+            return [];
         }
 
         try {
             const parsed = JSON.parse(outputText);
             console.log("[DEBUG] [parseWithAI] Successfully parsed JSON:", parsed);
-            return parsed;
+            return normalizeExpenses(parsed);
         } catch (err) {
             console.error("[DEBUG] [parseWithAI] Groq returned invalid JSON string:", outputText, err);
-            return null;
+            return [];
         }
     } catch (err) {
         console.error("[DEBUG] [parseWithAI] Groq API request exception:", err);
-        return null;
+        return [];
+    }
+}
+
+/**
+ * Parse image input with Groq Vision API (qwen/qwen3.6-27b) to extract expense items.
+ * @param {string} base64ImageUrl 
+ * @param {string} [captionText] 
+ * @returns {Promise<Array>}
+ */
+async function parseImageWithAI(base64ImageUrl, captionText) {
+    console.log(`[DEBUG] [parseImageWithAI] Parsing image with Groq Vision API (qwen/qwen3.6-27b)...`);
+    const apiKey = process.env.GROQ_API_KEY;
+    if (!apiKey) {
+        console.error("[DEBUG] [parseImageWithAI] GROQ_API_KEY is missing in .env");
+        return [];
+    }
+
+    const promptText = `
+Extract all expense details from this image/receipt.
+${captionText ? `Additional context from user: "${captionText}"` : ''}
+
+Current Date: ${new Date().toISOString().split('T')[0]}
+
+Return ONLY valid JSON in this format:
+{
+  "expenses": [
+    {
+      "amount": number,
+      "category": string,
+      "label": string,
+      "date": "YYYY-MM-DD",
+      "notes": string
+    }
+  ]
+}
+
+Rules:
+- amount: numerical value (must be > 0)
+- category: one of [Food, Travel, Entertainment, Shopping, Health, Bills, Others, Home, Personal, BBS, Recharge, D, S]
+- label: home/personal
+- date: extract transaction date or relative date. If missing on receipt/image, use today's date (${new Date().toISOString().split('T')[0]}).
+- notes: item description, store/vendor name, or line item details.
+- Extract all separate expense items if it's an itemized receipt or list of expenses.
+`;
+
+    try {
+        const response = await fetch("https://api.groq.com/openai/v1/chat/completions", {
+            method: "POST",
+            headers: {
+                "Authorization": `Bearer ${apiKey}`,
+                "Content-Type": "application/json"
+            },
+            body: JSON.stringify({
+                model: "qwen/qwen3.6-27b",
+                messages: [
+                    {
+                        role: "system",
+                        content: "You are an expert financial AI that parses receipts and bill images into structured expense JSON data."
+                    },
+                    {
+                        role: "user",
+                        content: [
+                            { type: "text", text: promptText },
+                            {
+                                type: "image_url",
+                                image_url: {
+                                    url: base64ImageUrl
+                                }
+                            }
+                        ]
+                    }
+                ],
+                response_format: { type: "json_object" },
+                temperature: 0.1
+            }),
+        });
+
+        console.log(`[DEBUG] [parseImageWithAI] Groq API HTTP Status: ${response.status} ${response.statusText}`);
+        const data = await response.json();
+        console.log("[DEBUG] [parseImageWithAI] Groq API Response Payload:", JSON.stringify(data, null, 2));
+
+        if (data.error) {
+            console.error("[DEBUG] [parseImageWithAI] GROQ API ERROR:", JSON.stringify(data.error, null, 2));
+            return [];
+        }
+
+        let outputText = data.choices?.[0]?.message?.content;
+        if (!outputText) {
+            console.log("[DEBUG] [parseImageWithAI] GROQ RESPONSE (Empty Content):", JSON.stringify(data, null, 2));
+            return [];
+        }
+
+        try {
+            const parsed = JSON.parse(outputText);
+            console.log("[DEBUG] [parseImageWithAI] Successfully parsed JSON:", parsed);
+            return normalizeExpenses(parsed);
+        } catch (err) {
+            console.error("[DEBUG] [parseImageWithAI] Groq returned invalid JSON string:", outputText, err);
+            return [];
+        }
+    } catch (err) {
+        console.error("[DEBUG] [parseImageWithAI] Groq API request exception:", err);
+        return [];
     }
 }
 
@@ -133,11 +307,22 @@ async function sendChatAction(chatId, action = 'typing') {
  */
 async function handleUpdate(message, saveTransactionFn) {
     console.log("[DEBUG] [handleUpdate] Incoming update message object:", JSON.stringify(message, null, 2));
-    const text = message?.text;
+    const text = message?.text || message?.caption || '';
     const chatId = message?.chat?.id;
+    const photos = message?.photo;
+    const document = message?.document;
 
-    if (!text || !chatId) {
-        console.log("[DEBUG] [handleUpdate] Skipped processing: Missing text or chatId.");
+    if (!chatId) {
+        console.log("[DEBUG] [handleUpdate] Skipped processing: Missing chatId.");
+        return;
+    }
+
+    // Determine if message contains image file
+    const isImageDocument = document && document.mime_type && document.mime_type.startsWith('image/');
+    const hasPhoto = (Array.isArray(photos) && photos.length > 0) || isImageDocument;
+
+    if (!text && !hasPhoto) {
+        console.log("[DEBUG] [handleUpdate] Skipped processing: Neither text nor image received.");
         return;
     }
 
@@ -168,14 +353,14 @@ async function handleUpdate(message, saveTransactionFn) {
             await user.save();
             console.log(`[DEBUG] [handleUpdate] User ${user.userId || user._id} linked successfully.`);
 
-            return sendMessageToTelegram(chatId, "✅ Account linked successfully! You can now send your expenses here (e.g., 'Coffee 5' or 'Fuel 50 yesterday').");
+            return sendMessageToTelegram(chatId, "✅ Account linked successfully! You can now send your expenses here as text (e.g., 'Coffee 5') or send receipt photos!");
         } catch (err) {
             console.error("[DEBUG] [handleUpdate] Linking error:", err);
             return sendMessageToTelegram(chatId, "⚠️ An error occurred during linking. Please try again later.");
         }
     }
 
-    // 2. Handle Expenses
+    // 2. Handle Expenses (Text or Image)
     try {
         console.log(`[DEBUG] [handleUpdate] Querying user record by telegramId "${chatId}"`);
         const user = await Users.findOne({ telegramId: chatId.toString() });
@@ -185,26 +370,51 @@ async function handleUpdate(message, saveTransactionFn) {
         }
         console.log(`[DEBUG] [handleUpdate] Found linked user ${user.userId || user._id}`);
 
-        // Show "typing..." immediately
-        await sendChatAction(chatId, 'typing');
+        let parsedExpenses = [];
 
-        console.log(`[DEBUG] [handleUpdate] Parsing expense text with Groq AI: "${text}"`);
-        const result = await parseWithAI(text);
-        console.log("[DEBUG] [handleUpdate] AI Parsing Result:", result);
+        if (hasPhoto) {
+            await sendChatAction(chatId, 'upload_photo');
+            const fileId = isImageDocument ? document.file_id : photos[photos.length - 1].file_id;
+            console.log(`[DEBUG] [handleUpdate] Processing photo update with fileId "${fileId}"...`);
 
-        if (result && result.amount) {
+            const base64Image = await getTelegramImageBase64(fileId);
+            if (!base64Image) {
+                return sendMessageToTelegram(chatId, "⚠️ Failed to download the photo from Telegram. Please try sending it again.");
+            }
+
+            parsedExpenses = await parseImageWithAI(base64Image, text);
+        } else {
+            await sendChatAction(chatId, 'typing');
+            console.log(`[DEBUG] [handleUpdate] Parsing expense text with Groq AI: "${text}"`);
+            parsedExpenses = await parseWithAI(text);
+        }
+
+        console.log("[DEBUG] [handleUpdate] Final parsed expenses array:", parsedExpenses);
+
+        if (parsedExpenses && parsedExpenses.length > 0) {
             try {
-                console.log(`[DEBUG] [handleUpdate] Saving transaction to database for user ${user.userId}...`);
-                await saveTransactionFn(user.userId, result);
-                console.log(`[DEBUG] [handleUpdate] Transaction saved successfully.`);
-                return sendMessageToTelegram(chatId, `✅ Added: $${result.amount.toLocaleString()} for ${result.notes || result.label || result.category} [${result.category}] on ${result.date}`);
+                console.log(`[DEBUG] [handleUpdate] Saving ${parsedExpenses.length} transaction(s) to database for user ${user.userId}...`);
+                await saveTransactionFn(user.userId, parsedExpenses);
+                console.log(`[DEBUG] [handleUpdate] Transaction(s) saved successfully.`);
+
+                const totalAmount = parsedExpenses.reduce((sum, item) => sum + (Number(item.amount) || 0), 0);
+
+                let responseMsg = `✅ Added ${parsedExpenses.length} transaction${parsedExpenses.length > 1 ? 's' : ''} (Total: $${totalAmount.toLocaleString()}):\n`;
+                parsedExpenses.forEach((item, index) => {
+                    responseMsg += `\n${index + 1}. $${Number(item.amount).toLocaleString()} - ${item.notes || item.label || item.category} [${item.category}] on ${item.date}`;
+                });
+
+                return sendMessageToTelegram(chatId, responseMsg);
             } catch (saveErr) {
-                console.error("[DEBUG] [handleUpdate] Error saving transaction from Telegram:", saveErr);
-                return sendMessageToTelegram(chatId, "❌ Failed to save the transaction to your account. Please try again.");
+                console.error("[DEBUG] [handleUpdate] Error saving transactions from Telegram:", saveErr);
+                return sendMessageToTelegram(chatId, "❌ Failed to save transaction(s) to your account. Please try again.");
             }
         } else {
-            console.log("[DEBUG] [handleUpdate] Unable to extract valid expense details/amount from result.");
-            return sendMessageToTelegram(chatId, "🤔 Sorry, I couldn't understand that expense structure. Try: 'uber 200 today' or 'coffee 5.5'");
+            console.log("[DEBUG] [handleUpdate] Unable to extract valid expense details/amount from input.");
+            const failMsg = hasPhoto
+                ? "🤔 Couldn't detect clear expense details in that image. Please make sure the receipt or image text is readable."
+                : "🤔 Sorry, I couldn't understand that expense structure. Try: 'uber 200 today' or send a receipt photo!";
+            return sendMessageToTelegram(chatId, failMsg);
         }
     } catch (err) {
         console.error("[DEBUG] [handleUpdate] Telegram handling error:", err);
@@ -213,5 +423,8 @@ async function handleUpdate(message, saveTransactionFn) {
 }
 
 module.exports = {
-    handleUpdate
+    handleUpdate,
+    parseWithAI,
+    parseImageWithAI,
+    getTelegramImageBase64
 };
