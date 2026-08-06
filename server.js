@@ -57,6 +57,26 @@ app.use(async (req, res, next) => {
   next();
 });
 
+// Health check endpoint to keep server and MongoDB active
+app.get(['/health', '/api/health', '/api/v1/health'], async (req, res) => {
+  try {
+    // Perform a lightweight MongoDB query to ensure DB stays active and avoids archiving
+    await Users.findOne({}).select('_id').lean();
+    res.status(200).json({
+      status: 'ok',
+      database: 'connected',
+      timestamp: new Date().toISOString()
+    });
+  } catch (error) {
+    console.error('[DEBUG] Health check database query failed:', error);
+    res.status(500).json({
+      status: 'error',
+      database: 'disconnected',
+      error: error.message
+    });
+  }
+});
+
 const dateStringToMonthYear = (dateString) => {
   const dateObject = new Date(dateString);
 

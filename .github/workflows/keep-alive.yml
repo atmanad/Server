@@ -1,0 +1,15 @@
+name: Keep API Alive
+
+on:
+  schedule:
+    - cron: "*/10 * * * *"   # Every 10 minutes
+  workflow_dispatch:
+
+jobs:
+  ping:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Ping API
+        run: |
+          curl -s -S -f -L https://spend-insight-server.vercel.app/health
