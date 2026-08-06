@@ -211,7 +211,7 @@ Rules:
                         content: [
                             {
                                 type: "text",
-                                text: captionText || "extract expense details"
+                                text: captionText || "extract expense details in json format"
                             },
                             {
                                 type: "image_url",
@@ -224,6 +224,7 @@ Rules:
                 ],
                 temperature: 0.6,
                 max_completion_tokens: 2048,
+                response_format: { "type": "json_object" },
                 top_p: 0.95
             }),
         });
