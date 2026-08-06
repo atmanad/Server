@@ -32,19 +32,30 @@ const corsOptions = {
 app.use(cors(corsOptions));
 app.use(express.json());
 
-// Connect to MongoDB
-mongoose
-  .connect(MONGODB_URI, {
-    useNewUrlParser: true,
-    useUnifiedTopology: true,
-    dbName: 'si-db'
-  })
-  .then(() => {
-    console.log('Connected to MongoDB');
-  })
-  .catch((error) => {
-    console.error('Error connecting to MongoDB:', error);
-  });
+// Connect to MongoDB (Serverless friendly)
+let isConnected = false;
+async function connectDB() {
+  if (isConnected || mongoose.connection.readyState === 1) {
+    isConnected = true;
+    return;
+  }
+  try {
+    console.log('[DEBUG] Connecting to MongoDB...');
+    await mongoose.connect(MONGODB_URI, {
+      dbName: 'si-db'
+    });
+    isConnected = true;
+    console.log('[DEBUG] Connected to MongoDB');
+  } catch (error) {
+    console.error('[DEBUG] Error connecting to MongoDB:', error);
+  }
+}
+
+// Middleware to ensure DB connection for serverless environment
+app.use(async (req, res, next) => {
+  await connectDB();
+  next();
+});
 
 const dateStringToMonthYear = (dateString) => {
   const dateObject = new Date(dateString);
@@ -99,15 +110,20 @@ async function saveTransaction(userId, transaction) {
 // --- Telegram helper functions moved to telegramService.js ---
 
 app.post('/api/v1/telegram', async (req, res) => {
+  console.log("[DEBUG] [/api/v1/telegram] Webhook received:", JSON.stringify(req.body, null, 2));
   const message = req.body?.message;
-  // Immediately respond to Telegram to prevent timeouts and re-deliveries
-  res.status(200).json({ status: "received" });
 
   if (message) {
-    // Process asynchronously to improve responsiveness
-    telegramService.handleUpdate(message, saveTransaction)
-      .catch(err => console.error("Error in Telegram processing:", err));
+    try {
+      // Must await handleUpdate in serverless environments (e.g., Vercel)
+      // so the process doesn't freeze after res.json() is called.
+      await telegramService.handleUpdate(message, saveTransaction);
+    } catch (err) {
+      console.error("[DEBUG] [/api/v1/telegram] Error in Telegram processing:", err);
+    }
   }
+
+  res.status(200).json({ status: "received" });
 });
 
 // ============================================ Transaction API =============================================================== //
