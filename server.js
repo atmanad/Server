@@ -8,6 +8,7 @@ const bodyParser = require('body-parser');
 require('dotenv').config();
 const { MONGODB_URI } = process.env;
 const telegramService = require('./telegramService');
+const categoryLearningEngine = require('./categoryLearningEngine');
 
 // Parse JSON bodies
 app.use(bodyParser.json());
@@ -98,15 +99,102 @@ async function saveTransaction(userId, transactionOrTransactions) {
       userId: userId,
       balance: 0,
       expenses: [],
-      categories: [{ categoryName: 'Food' }, { categoryName: "Travel" }],
+      categories: [
+        { categoryName: 'Food' },
+        { categoryName: 'Travel' },
+        { categoryName: 'Entertainment' },
+        { categoryName: 'Shopping' },
+        { categoryName: 'Others' }
+      ],
       labels: []
     });
+  }
+
+  if (!user.categories || user.categories.length === 0) {
+    user.categories = [
+      { categoryName: 'Food' },
+      { categoryName: 'Travel' },
+      { categoryName: 'Entertainment' },
+      { categoryName: 'Shopping' },
+      { categoryName: 'Others' }
+    ];
   }
 
   for (const transaction of transactions) {
     if (!transaction || (typeof transaction.amount !== 'number' && isNaN(Number(transaction.amount)))) {
       continue;
     }
+
+    const normKeywords = categoryLearningEngine.normalizeKeywords(transaction.keywords || []);
+
+    let selectedCatObj = null;
+    let learningStatus = {
+      categoryId: null,
+      categoryConfidence: 1.0,
+      categorySource: 'keyword_match'
+    };
+
+    if (transaction.category && transaction.category.trim() !== '') {
+      const catName = transaction.category.trim();
+      let matchCat = user.categories.find(c => (c.categoryName || c.name || '').toLowerCase() === catName.toLowerCase());
+      if (!matchCat) {
+        user.categories.push({ categoryName: catName, keywords: [] });
+        matchCat = user.categories[user.categories.length - 1];
+      }
+      selectedCatObj = matchCat;
+      const isCorrection = Boolean(transaction.isUserCorrection);
+      learningStatus = {
+        categoryId: matchCat._id ? matchCat._id.toString() : null,
+        categoryConfidence: 1.0,
+        categorySource: isCorrection ? 'user_corrected' : 'manual_entry'
+      };
+
+      if (normKeywords.length > 0) {
+        categoryLearningEngine.updateCategoryKeywords(
+          selectedCatObj,
+          normKeywords,
+          learningStatus.categorySource,
+          1.0,
+          isCorrection
+        );
+      }
+    } else {
+      const classification = await categoryLearningEngine.selectCategory(
+        user.categories,
+        normKeywords,
+        telegramService.classifyCategoryWithFallbackAI
+      );
+
+      transaction.category = classification.selectedCategoryName;
+
+      let matchCat = user.categories.find(c =>
+        (c.categoryName || c.name || '').toLowerCase() === classification.selectedCategoryName.toLowerCase()
+      );
+      if (!matchCat) {
+        user.categories.push({ categoryName: classification.selectedCategoryName, keywords: [] });
+        matchCat = user.categories[user.categories.length - 1];
+      }
+      selectedCatObj = matchCat;
+
+      learningStatus = {
+        categoryId: classification.selectedCategoryId || (matchCat._id ? matchCat._id.toString() : null),
+        categoryConfidence: classification.confidence,
+        categorySource: classification.source
+      };
+
+      if (normKeywords.length > 0) {
+        categoryLearningEngine.updateCategoryKeywords(
+          selectedCatObj,
+          normKeywords,
+          classification.source,
+          classification.confidence,
+          false
+        );
+      }
+    }
+
+    transaction.keywords = normKeywords;
+    transaction.learningStatus = learningStatus;
 
     const tDate = new Date(transaction.date || new Date().toISOString().split('T')[0]);
     const month = tDate.getMonth() + 1;
@@ -201,6 +289,87 @@ app.post('/api/v1/transactions', async (req, res) => {
     res.sendStatus(200);
   } catch (error) {
     console.error('Error inserting transaction:', error);
+    res.sendStatus(500);
+  }
+});
+
+// Endpoint to update a transaction (and trigger category learning if category is updated)
+app.put('/api/v1/transactions', async (req, res) => {
+  try {
+    const { userId, transactionId, updatedTransaction, transaction: txObject, date } = req.body;
+    const targetTx = updatedTransaction || txObject;
+
+    if (!userId || !transactionId || !targetTx) {
+      return res.status(400).json({ error: 'userId, transactionId, and transaction (or updatedTransaction) are required' });
+    }
+
+    const user = await Users.findOne({ userId: userId });
+    if (!user) return res.status(404).json({ error: 'User not found' });
+
+    const tDate = date || targetTx.date || new Date().toISOString();
+    const { month, year } = dateStringToMonthYear(tDate);
+    const expense = user.expenses.find(exp => exp.year === year && exp.month === month);
+
+    if (!expense) {
+      return res.status(404).json({ error: 'Expense not found' });
+    }
+
+    const transaction = expense.transactions.find((trans) => trans._id.toString() === transactionId);
+    if (!transaction) {
+      return res.status(404).json({ error: 'Transaction not found' });
+    }
+
+    // Adjust balance & savings if amount changed
+    if (typeof targetTx.amount === 'number' && !isNaN(targetTx.amount)) {
+      const diff = targetTx.amount - transaction.amount;
+      expense.savings -= diff;
+      user.balance -= diff;
+      transaction.amount = targetTx.amount;
+    }
+
+    if (targetTx.label !== undefined) transaction.label = targetTx.label;
+    if (targetTx.notes !== undefined) transaction.notes = targetTx.notes;
+    if (targetTx.date) transaction.date = new Date(targetTx.date);
+
+    // If category was changed/corrected by user
+    if (targetTx.category && targetTx.category.trim() !== '' && targetTx.category.trim().toLowerCase() !== (transaction.category || '').toLowerCase()) {
+      const newCategoryName = targetTx.category.trim();
+      transaction.category = newCategoryName;
+
+      let matchCat = user.categories.find(c => (c.categoryName || c.name || '').toLowerCase() === newCategoryName.toLowerCase());
+      if (!matchCat) {
+        user.categories.push({ categoryName: newCategoryName, keywords: [] });
+        matchCat = user.categories[user.categories.length - 1];
+      }
+
+      const keywordsToLearn = categoryLearningEngine.normalizeKeywords(
+        (targetTx.keywords && targetTx.keywords.length > 0)
+          ? targetTx.keywords
+          : (transaction.keywords || [])
+      );
+
+      if (keywordsToLearn.length > 0) {
+        categoryLearningEngine.updateCategoryKeywords(
+          matchCat,
+          keywordsToLearn,
+          'user_corrected',
+          1.0,
+          true
+        );
+      }
+
+      transaction.keywords = keywordsToLearn;
+      transaction.learningStatus = {
+        categoryId: matchCat._id ? matchCat._id.toString() : null,
+        categoryConfidence: 1.0,
+        categorySource: 'user_corrected'
+      };
+    }
+
+    await user.save();
+    res.status(200).json({ status: 'updated', transaction });
+  } catch (error) {
+    console.error('Error updating transaction:', error);
     res.sendStatus(500);
   }
 });

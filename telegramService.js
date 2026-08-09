@@ -46,6 +46,9 @@ async function getTelegramImageBase64(fileId) {
 /**
  * Helper to ensure parsed result always returns an array of valid expense objects.
  */
+/**
+ * Helper to ensure parsed result always returns an array of valid expense objects.
+ */
 function normalizeExpenses(parsed) {
     if (!parsed) return [];
 
@@ -58,11 +61,19 @@ function normalizeExpenses(parsed) {
         list = [parsed];
     }
 
-    return list.filter(item => item && (typeof item.amount === 'number' || !isNaN(Number(item.amount))) && Number(item.amount) > 0);
+    return list.filter(item => item && (typeof item.amount === 'number' || !isNaN(Number(item.amount))) && Number(item.amount) > 0)
+        .map(item => ({
+            amount: Number(item.amount),
+            category: item.category || '',
+            label: item.label || 'personal',
+            date: item.date,
+            notes: item.notes || item.description || '',
+            keywords: Array.isArray(item.keywords) ? item.keywords : []
+        }));
 }
 
 /**
- * Parse text input with Groq AI to extract expenses.
+ * Parse text input with Groq AI to extract expenses and generic nature keywords.
  * @param {string} text 
  * @returns {Promise<Array>}
  */
@@ -84,20 +95,25 @@ Return ONLY valid JSON in this format:
   "expenses": [
     {
       "amount": number,
-      "category": string,
-      "label": string,
       "date": "YYYY-MM-DD",
-      "notes": string
+      "notes": string,
+      "label": string,
+      "keywords": [string]
     }
   ]
 }
 
 Rules:
 - amount: numerical value
-- category: one of [Food, Travel, Entertainment, Shopping, Health, Bills, Others, Home, Personal, BBS, Recharge, D, S]
 - label: home/personal
 - date: extract date or relative date (e.g., "yesterday", "last friday"). If missing, use today's date.
-- notes: any additional information about the transaction
+- notes: short description of transaction
+- keywords: Provide up to 3 short, generic keywords describing the nature of the expense (e.g., ["bar", "drinks", "alcohol"] or ["clothing", "shopping", "shirt"]).
+- CRITICAL KEYWORD RULES:
+  * Do NOT generate or determine an expense category.
+  * Extract keywords describing the expense nature itself, not possible categories.
+  * STRICTLY EXCLUDE merchant names (never include store/vendor names as keywords).
+  * Exclude amounts, dates, currency, and unnecessary adjectives.
 - Extract all separate expenses if text mentions multiple items.
 `;
 
@@ -114,7 +130,7 @@ Rules:
                 messages: [
                     {
                         role: "system",
-                        content: "You are a helpful assistant that extracts expense details into structured JSON."
+                        content: "You are a helpful assistant that extracts expense details and generic expense nature keywords into structured JSON."
                     },
                     {
                         role: "user",
@@ -176,20 +192,25 @@ Return ONLY valid JSON in this format:
   "expenses": [
     {
       "amount": number,
-      "category": string,
-      "label": string,
       "date": "YYYY-MM-DD",
-      "notes": string
+      "notes": string,
+      "label": string,
+      "keywords": [string]
     }
   ]
 }
 
 Rules:
 - amount: numerical value (must be > 0)
-- category: one of [Food, Travel, Entertainment, Shopping, Health, Bills, Others, Home, Personal, BBS, Recharge, D, S]
 - label: home/personal
 - date: extract transaction date or relative date. If missing on receipt/image, use today's date (${new Date().toISOString().split('T')[0]}).
-- notes: item description, store/vendor name, or line item details.
+- notes: item description or line item details.
+- keywords: Provide up to 3 short, generic keywords describing the nature of the expense (e.g., ["grocery", "food", "milk"]).
+- CRITICAL KEYWORD RULES:
+  * Do NOT generate or determine an expense category.
+  * Extract keywords describing the expense nature itself.
+  * STRICTLY EXCLUDE merchant or store names from keywords.
+  * Exclude amounts, dates, currency, and unnecessary adjectives.
 - Extract all separate expense items if it's an itemized receipt or list of expenses.`;
 
     try {
@@ -260,6 +281,63 @@ Rules:
     } catch (err) {
         console.error("[DEBUG] [parseImageWithAI] Groq API request exception:", err);
         return [];
+    }
+}
+
+/**
+ * Secondary Groq AI call for ambiguous category matching or initial user seeding.
+ * @param {Array<string>} keywords 
+ * @param {Array<string>} availableCategories 
+ * @returns {Promise<string|null>}
+ */
+async function classifyCategoryWithFallbackAI(keywords, availableCategories) {
+    console.log(`[DEBUG] [classifyCategoryWithFallbackAI] Keywords: [${keywords.join(', ')}], Available categories: [${availableCategories.join(', ')}]`);
+    const apiKey = process.env.GROQ_API_KEY;
+    if (!apiKey || !Array.isArray(keywords) || keywords.length === 0 || !Array.isArray(availableCategories) || availableCategories.length === 0) {
+        return null;
+    }
+
+    const prompt = `
+Expense keywords: ${keywords.join(', ')}
+Available categories: ${availableCategories.join(', ')}
+
+Rules:
+- Select the SINGLE best fitting category from the "Available categories" list for these expense keywords.
+- Do NOT create a new category name. You MUST pick one from the provided list.
+- Return ONLY valid JSON in this format: {"category": "CategoryName"}
+`;
+
+    try {
+        const response = await fetch("https://api.groq.com/openai/v1/chat/completions", {
+            method: "POST",
+            headers: {
+                "Authorization": `Bearer ${apiKey}`,
+                "Content-Type": "application/json"
+            },
+            body: JSON.stringify({
+                model: "llama-3.3-70b-versatile",
+                messages: [
+                    { role: "system", content: "You are a precise categorization assistant." },
+                    { role: "user", content: prompt }
+                ],
+                response_format: { type: "json_object" },
+                temperature: 0.1
+            })
+        });
+
+        const data = await response.json();
+        const content = data.choices?.[0]?.message?.content;
+        if (content) {
+            const parsed = JSON.parse(content);
+            if (parsed.category) {
+                console.log(`[DEBUG] [classifyCategoryWithFallbackAI] Selected category: ${parsed.category}`);
+                return parsed.category;
+            }
+        }
+        return null;
+    } catch (err) {
+        console.error("[DEBUG] [classifyCategoryWithFallbackAI] Error:", err);
+        return null;
     }
 }
 
@@ -431,5 +509,6 @@ module.exports = {
     handleUpdate,
     parseWithAI,
     parseImageWithAI,
-    getTelegramImageBase64
+    getTelegramImageBase64,
+    classifyCategoryWithFallbackAI
 };
