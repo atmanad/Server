@@ -88,62 +88,50 @@ async function parseWithAI(text, categories, normalizeKeywordsFn) {
         return [];
     }
 
-    // Build category context for LLM
+    // Build category context for LLM (compact format to stay within token limits)
     let categoryContext = '';
     if (Array.isArray(categories) && categories.length > 0) {
         const categoriesWithKeywords = categories.map(cat => {
             const keywords = Array.isArray(cat.keywords) ? cat.keywords : [];
-            // Sort by weight and take top 5
+            // Sort by weight and take top 5, then format as comma-separated list
             const topKeywords = keywords
                 .sort((a, b) => b.weight - a.weight)
                 .slice(0, 5)
                 .map(k => k.word)
                 .join(', ');
-            return {
-                category: cat.categoryName || cat.name,
-                topKeywords: topKeywords
-            };
+            return `${cat.categoryName || cat.name}: [${topKeywords}]`;
         });
-        categoryContext = `\n\nUser's available categories and learned keywords:\n${JSON.stringify(categoriesWithKeywords, null, 2)}`;
+        // Limit to 5 categories to keep prompt short
+        const limitedContext = categoriesWithKeywords.slice(0, 5).join('\n');
+        categoryContext = `\n\nAvailable categories and top keywords:\n${limitedContext}`;
     }
 
     const prompt = `
-Extract expense details from this text: "${text}"${categoryContext}
+Extract expense details from: "${text}"
+Date: ${new Date().toISOString().split('T')[0]}
 
-Current Date: ${new Date().toISOString().split('T')[0]}
+Categories (pick one):${categoryContext}
 
-Return ONLY valid JSON in this format:
+Return JSON:
 {
-  "expenses": [
-    {
-      "amount": number,
-      "date": "YYYY-MM-DD",
-      "notes": string,
-      "label": string,
-      "category": string,
-      "keywords": [string]
-    }
-  ]
+  "expenses": [{
+    "amount": number,
+    "date": "YYYY-MM-DD",
+    "notes": string,
+    "label": string,
+    "category": "exact-category-name",
+    "keywords": [string]
+  }]
 }
 
 Rules:
-- amount: numerical value
-- label: home/personal
-- date: extract date or relative date (e.g., "yesterday", "last friday"). If missing, use today's date.
-- notes: short description of transaction
-- category: MUST be exactly one of the user's provided categories (case-sensitive match). Do NOT create, rename, or modify categories.
-- keywords: Provide up to 3 short keywords describing the nature of the expense.
-- Use the user's categories and learned keywords as context when determining the category.
-- Prefer the category whose learned keywords and meaning best match the expense.
-- Do NOT include merchant names as keywords.
-- Exclude amounts, dates, currency, and generic words like "expense" or "payment" as keywords.
-- Extract all separate expenses if text mentions multiple items.
+- category MUST be exactly one of the user's provided categories
+- keywords: up to 3 short keywords for expense nature (no merchant names, no generic words)
+- Extract all expenses if text mentions multiple items.
 `;
 
-    console.log(`[DEBUG] [parseWithAI] Groq API prompt: ${categoryContext}`);
-
     try {
-        console.log("[DEBUG] [parseWithAI] Sending request to Groq API (llama-3.3-70b-versatile)...");
+        console.log("[DEBUG] [parseWithAI] Sending request to Groq API");
         const response = await fetch("https://api.groq.com/openai/v1/chat/completions", {
             method: "POST",
             headers: {
@@ -227,53 +215,43 @@ async function parseImageWithAI(base64ImageUrl, captionText, categories, normali
         return [];
     }
 
-    // Build category context for LLM
+    // Build category context for LLM (compact format to stay within token limits)
     let categoryContext = '';
     if (Array.isArray(categories) && categories.length > 0) {
         const categoriesWithKeywords = categories.map(cat => {
             const keywords = Array.isArray(cat.keywords) ? cat.keywords : [];
-            // Sort by weight and take top 5
+            // Sort by weight and take top 5, then format as comma-separated list
             const topKeywords = keywords
                 .sort((a, b) => b.weight - a.weight)
                 .slice(0, 5)
                 .map(k => k.word)
                 .join(', ');
-            return {
-                category: cat.categoryName || cat.name,
-                topKeywords: topKeywords
-            };
+            return `${cat.categoryName || cat.name}: [${topKeywords}]`;
         });
-        categoryContext = `\n\nUser's available categories and learned keywords:\n${JSON.stringify(categoriesWithKeywords, null, 2)}`;
+        // Limit to 5 categories to keep prompt short
+        const limitedContext = categoriesWithKeywords.slice(0, 5).join('\n');
+        categoryContext = `\n\nAvailable categories and top keywords:\n${limitedContext}`;
     }
 
-    const systemPrompt = `Extract all expense details from this image/receipt.${categoryContext}
+    const systemPrompt = `Extract expense details from this image/receipt.${categoryContext}
 
-Return ONLY valid JSON in this format:
+Return JSON:
 {
-  "expenses": [
-    {
-      "amount": number,
-      "date": "YYYY-MM-DD",
-      "notes": string,
-      "label": string,
-      "category": string,
-      "keywords": [string]
-    }
-  ]
+  "expenses": [{
+    "amount": number,
+    "date": "YYYY-MM-DD",
+    "notes": string,
+    "label": string,
+    "category": "exact-category-name",
+    "keywords": [string]
+  }]
 }
 
 Rules:
-- amount: numerical value (must be > 0)
-- label: home/personal
-- date: extract transaction date or relative date. If missing on receipt/image, use today's date (${new Date().toISOString().split('T')[0]}).
-- notes: item description or line item details.
-- category: MUST be exactly one of the user's provided categories (case-sensitive match). Do NOT create, rename, or modify categories.
-- keywords: Provide up to 3 short keywords describing the nature of the expense.
-- Use the user's categories and learned keywords as context when determining the category.
-- Prefer the category whose learned keywords and meaning best match the expense.
-- Do NOT include merchant or store names as keywords.
-- Exclude amounts, dates, currency, and generic words like "expense" or "payment" as keywords.
-- Extract all separate expense items if it's an itemized receipt or list of expenses.`;
+- category MUST be exactly one of the user's provided categories
+- keywords: up to 3 short keywords for expense nature (no merchant names, no generic words)
+- Extract all expense items if it's an itemized receipt.
+`;
 
     try {
         const response = await fetch("https://api.groq.com/openai/v1/chat/completions", {
