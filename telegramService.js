@@ -139,7 +139,7 @@ Rules:
                 "Content-Type": "application/json"
             },
             body: JSON.stringify({
-                model: "meta-llama/llama-prompt-guard-2-86m",
+                model: "openai/gpt-oss-20b",
                 messages: [
                     {
                         role: "system",
@@ -370,7 +370,7 @@ Rules:
                 "Content-Type": "application/json"
             },
             body: JSON.stringify({
-                model: "meta-llama/llama-prompt-guard-2-86m",
+                model: "openai/gpt-oss-20b",
                 messages: [
                     { role: "system", content: "You are a precise categorization assistant." },
                     { role: "user", content: prompt }
