@@ -149,7 +149,7 @@ Rules:
                 "Content-Type": "application/json"
             },
             body: JSON.stringify({
-                model: "llama-3.3-70b-versatile",
+                model: "meta-llama/llama-prompt-guard-2-86m",
                 messages: [
                     {
                         role: "system",
@@ -390,7 +390,7 @@ Rules:
                 "Content-Type": "application/json"
             },
             body: JSON.stringify({
-                model: "llama-3.3-70b-versatile",
+                model: "meta-llama/llama-prompt-guard-2-86m",
                 messages: [
                     { role: "system", content: "You are a precise categorization assistant." },
                     { role: "user", content: prompt }
