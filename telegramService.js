@@ -102,8 +102,8 @@ async function parseWithAI(text, categories, normalizeKeywordsFn) {
             return `${cat.categoryName || cat.name}: [${topKeywords}]`;
         });
         // Limit to 5 categories to keep prompt short
-        const limitedContext = categoriesWithKeywords.slice(0, 5).join('\n');
-        categoryContext = `\n\nAvailable categories and top keywords:\n${limitedContext}`;
+        // const limitedContext = categoriesWithKeywords.slice(0, 5).join('\n');
+        categoryContext = `\n\nAvailable categories and top keywords:\n${categoriesWithKeywords}`;
     }
 
     const prompt = `
@@ -229,8 +229,8 @@ async function parseImageWithAI(base64ImageUrl, captionText, categories, normali
             return `${cat.categoryName || cat.name}: [${topKeywords}]`;
         });
         // Limit to 5 categories to keep prompt short
-        const limitedContext = categoriesWithKeywords.slice(0, 5).join('\n');
-        categoryContext = `\n\nAvailable categories and top keywords:\n${limitedContext}`;
+        // const limitedContext = categoriesWithKeywords.slice(0, 5).join('\n');
+        categoryContext = `\n\nAvailable categories and top keywords:\n${categoriesWithKeywords}`;
     }
 
     const systemPrompt = `Extract expense details from this image/receipt.${categoryContext}
