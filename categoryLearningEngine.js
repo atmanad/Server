@@ -2,11 +2,10 @@
  * Category Learning Engine
  * 
  * Handles keyword normalization, scoring categories based on keyword weights,
- * determining confidence, triggering secondary fallback AI, and updating
- * learned category keywords while enforcing MAX_KEYWORDS_PER_CATEGORY limit.
+ * determining confidence, and updating learned category keywords while enforcing MAX_KEYWORDS_PER_CATEGORY limit.
  */
 
-const MAX_KEYWORDS_PER_CATEGORY = 10;
+const MAX_KEYWORDS_PER_CATEGORY = 5;
 const NEW_KEYWORD_WEIGHT = 1;
 const NORMAL_MATCH_INCREMENT = 1;
 const STRONG_MATCH_INCREMENT = 2;

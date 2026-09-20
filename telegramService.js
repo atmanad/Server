@@ -1,4 +1,5 @@
 const Users = require('./model');
+const categoryLearningEngine = require('./categoryLearningEngine');
 
 /**
  * Fetch image file from Telegram Bot API and convert to Base64 Data URL.
@@ -75,9 +76,11 @@ function normalizeExpenses(parsed) {
 /**
  * Parse text input with Groq AI to extract expenses and generic nature keywords.
  * @param {string} text 
+ * @param {Array<Object>} [categories] - User's categories with keywords for context
+ * @param {Function} [normalizeKeywordsFn] - normalizeKeywords function from categoryLearningEngine
  * @returns {Promise<Array>}
  */
-async function parseWithAI(text) {
+async function parseWithAI(text, categories, normalizeKeywordsFn) {
     console.log(`[DEBUG] [parseWithAI] Parsing text: "${text}"`);
     const apiKey = process.env.GROQ_API_KEY;
     if (!apiKey) {
@@ -85,8 +88,27 @@ async function parseWithAI(text) {
         return [];
     }
 
+    // Build category context for LLM
+    let categoryContext = '';
+    if (Array.isArray(categories) && categories.length > 0) {
+        const categoriesWithKeywords = categories.map(cat => {
+            const keywords = Array.isArray(cat.keywords) ? cat.keywords : [];
+            // Sort by weight and take top 5
+            const topKeywords = keywords
+                .sort((a, b) => b.weight - a.weight)
+                .slice(0, 5)
+                .map(k => k.word)
+                .join(', ');
+            return {
+                category: cat.categoryName || cat.name,
+                topKeywords: topKeywords
+            };
+        });
+        categoryContext = `\n\nUser's available categories and learned keywords:\n${JSON.stringify(categoriesWithKeywords, null, 2)}`;
+    }
+
     const prompt = `
-Extract expense details from this text: "${text}"
+Extract expense details from this text: "${text}"${categoryContext}
 
 Current Date: ${new Date().toISOString().split('T')[0]}
 
@@ -98,6 +120,7 @@ Return ONLY valid JSON in this format:
       "date": "YYYY-MM-DD",
       "notes": string,
       "label": string,
+      "category": string,
       "keywords": [string]
     }
   ]
@@ -108,12 +131,12 @@ Rules:
 - label: home/personal
 - date: extract date or relative date (e.g., "yesterday", "last friday"). If missing, use today's date.
 - notes: short description of transaction
-- keywords: Provide up to 3 short, generic keywords describing the nature of the expense (e.g., ["bar", "drinks", "alcohol"] or ["clothing", "shopping", "shirt"]).
-- CRITICAL KEYWORD RULES:
-  * Do NOT generate or determine an expense category.
-  * Extract keywords describing the expense nature itself, not possible categories.
-  * STRICTLY EXCLUDE merchant names (never include store/vendor names as keywords).
-  * Exclude amounts, dates, currency, and unnecessary adjectives.
+- category: MUST be exactly one of the user's provided categories (case-sensitive match). Do NOT create, rename, or modify categories.
+- keywords: Provide up to 3 short keywords describing the nature of the expense.
+- Use the user's categories and learned keywords as context when determining the category.
+- Prefer the category whose learned keywords and meaning best match the expense.
+- Do NOT include merchant names as keywords.
+- Exclude amounts, dates, currency, and generic words like "expense" or "payment" as keywords.
 - Extract all separate expenses if text mentions multiple items.
 `;
 
@@ -160,7 +183,22 @@ Rules:
         try {
             const parsed = JSON.parse(outputText);
             console.log("[DEBUG] [parseWithAI] Successfully parsed JSON:", parsed);
-            return normalizeExpenses(parsed);
+            
+            // Normalize keywords for each expense
+            const normalizedExpenses = normalizeExpenses(parsed).map(expense => {
+                // If category was provided by LLM and we have normalizeKeywords function, use it
+                const normKeywords = normalizeKeywordsFn 
+                    ? normalizeKeywordsFn(expense.keywords || [])
+                    : (expense.keywords ? Array.isArray(expense.keywords) ? expense.keywords : [expense.keywords] : []);
+                
+                return {
+                    ...expense,
+                    keywords: normKeywords
+                };
+            });
+            
+            console.log("[DEBUG] [parseWithAI] Normalized expenses:", normalizedExpenses);
+            return normalizedExpenses;
         } catch (err) {
             console.error("[DEBUG] [parseWithAI] Groq returned invalid JSON string:", outputText, err);
             return [];
@@ -175,9 +213,11 @@ Rules:
  * Parse image input with Groq Vision API (qwen/qwen3.6-27b) to extract expense items.
  * @param {string} base64ImageUrl 
  * @param {string} [captionText] 
+ * @param {Array<Object>} [categories] - User's categories with keywords for context
+ * @param {Function} [normalizeKeywordsFn] - normalizeKeywords function from categoryLearningEngine
  * @returns {Promise<Array>}
  */
-async function parseImageWithAI(base64ImageUrl, captionText) {
+async function parseImageWithAI(base64ImageUrl, captionText, categories, normalizeKeywordsFn) {
     console.log(`[DEBUG] [parseImageWithAI] Parsing image with Groq Vision API (qwen/qwen3.6-27b)...`);
     const apiKey = process.env.GROQ_API_KEY;
     if (!apiKey) {
@@ -185,7 +225,26 @@ async function parseImageWithAI(base64ImageUrl, captionText) {
         return [];
     }
 
-    const systemPrompt = `Extract all expense details from this image/receipt.
+    // Build category context for LLM
+    let categoryContext = '';
+    if (Array.isArray(categories) && categories.length > 0) {
+        const categoriesWithKeywords = categories.map(cat => {
+            const keywords = Array.isArray(cat.keywords) ? cat.keywords : [];
+            // Sort by weight and take top 5
+            const topKeywords = keywords
+                .sort((a, b) => b.weight - a.weight)
+                .slice(0, 5)
+                .map(k => k.word)
+                .join(', ');
+            return {
+                category: cat.categoryName || cat.name,
+                topKeywords: topKeywords
+            };
+        });
+        categoryContext = `\n\nUser's available categories and learned keywords:\n${JSON.stringify(categoriesWithKeywords, null, 2)}`;
+    }
+
+    const systemPrompt = `Extract all expense details from this image/receipt.${categoryContext}
 
 Return ONLY valid JSON in this format:
 {
@@ -195,6 +254,7 @@ Return ONLY valid JSON in this format:
       "date": "YYYY-MM-DD",
       "notes": string,
       "label": string,
+      "category": string,
       "keywords": [string]
     }
   ]
@@ -205,12 +265,12 @@ Rules:
 - label: home/personal
 - date: extract transaction date or relative date. If missing on receipt/image, use today's date (${new Date().toISOString().split('T')[0]}).
 - notes: item description or line item details.
-- keywords: Provide up to 3 short, generic keywords describing the nature of the expense (e.g., ["grocery", "food", "milk"]).
-- CRITICAL KEYWORD RULES:
-  * Do NOT generate or determine an expense category.
-  * Extract keywords describing the expense nature itself.
-  * STRICTLY EXCLUDE merchant or store names from keywords.
-  * Exclude amounts, dates, currency, and unnecessary adjectives.
+- category: MUST be exactly one of the user's provided categories (case-sensitive match). Do NOT create, rename, or modify categories.
+- keywords: Provide up to 3 short keywords describing the nature of the expense.
+- Use the user's categories and learned keywords as context when determining the category.
+- Prefer the category whose learned keywords and meaning best match the expense.
+- Do NOT include merchant or store names as keywords.
+- Exclude amounts, dates, currency, and generic words like "expense" or "payment" as keywords.
 - Extract all separate expense items if it's an itemized receipt or list of expenses.`;
 
     try {
@@ -273,7 +333,22 @@ Rules:
         try {
             const parsed = JSON.parse(cleanText);
             console.log("[DEBUG] [parseImageWithAI] Successfully parsed JSON:", parsed);
-            return normalizeExpenses(parsed);
+            
+            // Normalize keywords for each expense
+            const normalizedExpenses = normalizeExpenses(parsed).map(expense => {
+                // If category was provided by LLM and we have normalizeKeywords function, use it
+                const normKeywords = normalizeKeywordsFn 
+                    ? normalizeKeywordsFn(expense.keywords || [])
+                    : (expense.keywords ? Array.isArray(expense.keywords) ? expense.keywords : [expense.keywords] : []);
+                
+                return {
+                    ...expense,
+                    keywords: normKeywords
+                };
+            });
+            
+            console.log("[DEBUG] [parseImageWithAI] Normalized expenses:", normalizedExpenses);
+            return normalizedExpenses;
         } catch (err) {
             console.error("[DEBUG] [parseImageWithAI] Groq returned invalid JSON string:", outputText, err);
             return [];
@@ -465,11 +540,11 @@ async function handleUpdate(message, saveTransactionFn) {
                 return sendMessageToTelegram(chatId, "⚠️ Failed to download the photo from Telegram. Please try sending it again.");
             }
 
-            parsedExpenses = await parseImageWithAI(base64Image, text);
+            parsedExpenses = await parseImageWithAI(base64Image, text, user.categories, categoryLearningEngine.normalizeKeywords);
         } else {
             await sendChatAction(chatId, 'typing');
             console.log(`[DEBUG] [handleUpdate] Parsing expense text with Groq AI: "${text}"`);
-            parsedExpenses = await parseWithAI(text);
+            parsedExpenses = await parseWithAI(text, user.categories, categoryLearningEngine.normalizeKeywords);
         }
 
         console.log("[DEBUG] [handleUpdate] Final parsed expenses array:", parsedExpenses);

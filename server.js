@@ -155,8 +155,7 @@ async function saveTransaction(userId, transactionOrTransactions) {
       continue;
     }
 
-    const normKeywords = categoryLearningEngine.normalizeKeywords(transaction.keywords || []);
-
+    // Use LLM-selected category if available, otherwise normalize keywords for local classification
     let selectedCatObj = null;
     let learningStatus = {
       categoryId: null,
@@ -165,30 +164,40 @@ async function saveTransaction(userId, transactionOrTransactions) {
     };
 
     if (transaction.category && transaction.category.trim() !== '') {
+      // LLM has selected a category - use it directly
       const catName = transaction.category.trim();
       let matchCat = user.categories.find(c => (c.categoryName || c.name || '').toLowerCase() === catName.toLowerCase());
+      
       if (!matchCat) {
+        // Category doesn't exist, create it
         user.categories.push({ categoryName: catName, keywords: [] });
         matchCat = user.categories[user.categories.length - 1];
       }
+      
       selectedCatObj = matchCat;
-      const isCorrection = Boolean(transaction.isUserCorrection);
-      learningStatus = {
-        categoryId: matchCat._id ? matchCat._id.toString() : null,
-        categoryConfidence: 1.0,
-        categorySource: isCorrection ? 'user_corrected' : 'manual_entry'
-      };
-
+      
+      // Update keyword weights using LLM's selected category and normalized keywords
+      const normKeywords = categoryLearningEngine.normalizeKeywords(transaction.keywords || []);
+      
       if (normKeywords.length > 0) {
         categoryLearningEngine.updateCategoryKeywords(
           selectedCatObj,
           normKeywords,
-          learningStatus.categorySource,
-          1.0,
-          isCorrection
+          'llm_category_selection',
+          0.8,
+          false
         );
       }
+      
+      learningStatus = {
+        categoryId: matchCat._id ? matchCat._id.toString() : null,
+        categoryConfidence: 0.8,
+        categorySource: 'llm_category_selection'
+      };
     } else {
+      // Fallback to local classification if no LLM category
+      const normKeywords = categoryLearningEngine.normalizeKeywords(transaction.keywords || []);
+      
       const classification = await categoryLearningEngine.selectCategory(
         user.categories,
         normKeywords,
@@ -223,7 +232,7 @@ async function saveTransaction(userId, transactionOrTransactions) {
       }
     }
 
-    transaction.keywords = normKeywords;
+    transaction.keywords = categoryLearningEngine.normalizeKeywords(transaction.keywords || []);
     transaction.learningStatus = learningStatus;
 
     const tDate = new Date(transaction.date || new Date().toISOString().split('T')[0]);
