@@ -173,20 +173,20 @@ Rules:
         try {
             const parsed = JSON.parse(outputText);
             console.log("[DEBUG] [parseWithAI] Successfully parsed JSON:", parsed);
-            
+
             // Normalize keywords for each expense
             const normalizedExpenses = normalizeExpenses(parsed).map(expense => {
                 // If category was provided by LLM and we have normalizeKeywords function, use it
-                const normKeywords = normalizeKeywordsFn 
+                const normKeywords = normalizeKeywordsFn
                     ? normalizeKeywordsFn(expense.keywords || [])
                     : (expense.keywords ? Array.isArray(expense.keywords) ? expense.keywords : [expense.keywords] : []);
-                
+
                 return {
                     ...expense,
                     keywords: normKeywords
                 };
             });
-            
+
             console.log("[DEBUG] [parseWithAI] Normalized expenses:", normalizedExpenses);
             return normalizedExpenses;
         } catch (err) {
@@ -261,7 +261,7 @@ Rules:
                 "Content-Type": "application/json"
             },
             body: JSON.stringify({
-                model: "qwen/qwen3.6-27b",
+                model: "qwen/qwen3.8-27b",
                 messages: [
                     {
                         role: "system",
@@ -313,20 +313,20 @@ Rules:
         try {
             const parsed = JSON.parse(cleanText);
             console.log("[DEBUG] [parseImageWithAI] Successfully parsed JSON:", parsed);
-            
+
             // Normalize keywords for each expense
             const normalizedExpenses = normalizeExpenses(parsed).map(expense => {
                 // If category was provided by LLM and we have normalizeKeywords function, use it
-                const normKeywords = normalizeKeywordsFn 
+                const normKeywords = normalizeKeywordsFn
                     ? normalizeKeywordsFn(expense.keywords || [])
                     : (expense.keywords ? Array.isArray(expense.keywords) ? expense.keywords : [expense.keywords] : []);
-                
+
                 return {
                     ...expense,
                     keywords: normKeywords
                 };
             });
-            
+
             console.log("[DEBUG] [parseImageWithAI] Normalized expenses:", normalizedExpenses);
             return normalizedExpenses;
         } catch (err) {

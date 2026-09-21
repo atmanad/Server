@@ -11,33 +11,6 @@ const NORMAL_MATCH_INCREMENT = 1;
 const STRONG_MATCH_INCREMENT = 2;
 const USER_CORRECTION_INCREMENT = 3;
 
-// Generic terms that should never become category keywords
-const STOP_WORDS = new Set([
-  'expense', 'payment', 'money', 'purchase', 'spend', 'cost', 'buy',
-  'item', 'total', 'bill', 'price', 'paid', 'rs', 'inr', 'dollar',
-  'dollars', 'cent', 'rupees', 'rupee', 'amount', 'transaction'
-]);
-
-// Common variations and synonyms mapping
-const SYNONYM_MAP = {
-  'alcoholic': 'alcohol',
-  'beers': 'beer',
-  'drinks': 'drink',
-  'groceries': 'grocery',
-  'movies': 'movie',
-  'flights': 'flight',
-  'hotels': 'hotel',
-  'clothes': 'clothing',
-  'clothings': 'clothing',
-  'coffees': 'coffee',
-  'medicines': 'medicine',
-  'meds': 'medicine',
-  'cabs': 'cab',
-  'taxis': 'taxi',
-  'veggies': 'vegetable',
-  'vegetables': 'vegetable'
-};
-
 /**
  * Clean and normalize a single keyword string.
  * @param {string} word 
@@ -52,7 +25,6 @@ function normalizeSingleKeyword(word) {
   cleaned = cleaned.replace(/[^a-z0-9\s-]/g, '').trim();
 
   if (!cleaned || cleaned.length < 2) return '';
-  if (STOP_WORDS.has(cleaned)) return '';
 
   // Basic singularization/stemming
   if (cleaned.endsWith('ies') && cleaned.length > 4) {
@@ -61,11 +33,6 @@ function normalizeSingleKeyword(word) {
     cleaned = cleaned.slice(0, -1);
   }
 
-  if (SYNONYM_MAP[cleaned]) {
-    cleaned = SYNONYM_MAP[cleaned];
-  }
-
-  if (STOP_WORDS.has(cleaned)) return '';
   return cleaned;
 }
 
