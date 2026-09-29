@@ -167,18 +167,18 @@ async function saveTransaction(userId, transactionOrTransactions) {
       // LLM has selected a category - use it directly
       const catName = transaction.category.trim();
       let matchCat = user.categories.find(c => (c.categoryName || c.name || '').toLowerCase() === catName.toLowerCase());
-      
+
       if (!matchCat) {
         // Category doesn't exist, create it
         user.categories.push({ categoryName: catName, keywords: [] });
         matchCat = user.categories[user.categories.length - 1];
       }
-      
+
       selectedCatObj = matchCat;
-      
+
       // Update keyword weights using LLM's selected category and normalized keywords
       const normKeywords = categoryLearningEngine.normalizeKeywords(transaction.keywords || []);
-      
+
       if (normKeywords.length > 0) {
         categoryLearningEngine.updateCategoryKeywords(
           selectedCatObj,
@@ -188,7 +188,7 @@ async function saveTransaction(userId, transactionOrTransactions) {
           false
         );
       }
-      
+
       learningStatus = {
         categoryId: matchCat._id ? matchCat._id.toString() : null,
         categoryConfidence: 0.8,
@@ -197,7 +197,7 @@ async function saveTransaction(userId, transactionOrTransactions) {
     } else {
       // Fallback to local classification if no LLM category
       const normKeywords = categoryLearningEngine.normalizeKeywords(transaction.keywords || []);
-      
+
       const classification = await categoryLearningEngine.selectCategory(
         user.categories,
         normKeywords,
@@ -393,35 +393,102 @@ app.put('/api/v1/transactions', async (req, res) => {
     const user = await Users.findOne({ userId: userId });
     if (!user) return res.status(404).json({ error: 'User not found' });
 
-    const tDate = date || targetTx.date || new Date().toISOString();
-    const { month, year } = dateStringToMonthYear(tDate);
-    const expense = user.expenses.find(exp => exp.year === year && exp.month === month);
+    // Build two maps in a single O(E*T) pass:
+    //   expenseIndexMap : transactionId → expense array index  (for O(1) transaction lookup)
+    //   expenseMonthMap : "year-month"  → expense object        (for O(1) target-period lookup)
+    const expenseIndexMap = new Map();  // transactionId  → expense index
+    const expenseTransIndexMap = new Map(); // transactionId → transaction index within its expense
+    const expenseMonthMap = new Map();  // "year-month" key → expense object
 
-    if (!expense) {
-      return res.status(404).json({ error: 'Expense not found' });
-    }
+    user.expenses.forEach((expense, expIdx) => {
+      expenseMonthMap.set(`${expense.year}-${expense.month}`, expense);
+      expense.transactions.forEach((trans, transIdx) => {
+        expenseIndexMap.set(trans._id.toString(), expIdx);
+        expenseTransIndexMap.set(trans._id.toString(), transIdx);
+      });
+    });
 
-    const transaction = expense.transactions.find((trans) => trans._id.toString() === transactionId);
-    if (!transaction) {
+    const expenseIdx = expenseIndexMap.get(transactionId);
+    if (expenseIdx === undefined) {
       return res.status(404).json({ error: 'Transaction not found' });
     }
 
-    // Adjust balance & savings if amount changed
-    if (typeof targetTx.amount === 'number' && !isNaN(targetTx.amount)) {
-      const diff = targetTx.amount - transaction.amount;
-      expense.savings -= diff;
-      user.balance -= diff;
-      transaction.amount = targetTx.amount;
+    const expenseWithTransaction = user.expenses[expenseIdx];
+    // O(1): use pre-captured index instead of a second .find()
+    const transIdx = expenseTransIndexMap.get(transactionId);
+    const transaction = expenseWithTransaction.transactions[transIdx];
+
+    // Get original month/year for comparison
+    const originalDate = transaction.date || new Date();
+    const { month: origMonth, year: origYear } = dateStringToMonthYear(originalDate.toISOString());
+
+    // Determine new month/year from the update
+    const tDate = date || targetTx.date || originalDate.toISOString();
+    const { month: newMonth, year: newYear } = dateStringToMonthYear(tDate);
+
+    // Track which expense period the transaction currently lives in (may change below)
+    let activeExpense = expenseWithTransaction;
+
+    // If date changed to a different month/year, move the transaction to the new expense period
+    if (origMonth !== newMonth || origYear !== newYear) {
+      // Snapshot as a plain JS object BEFORE splicing:
+      // Pushing a Mongoose ArraySubdocument that still has an old $__parent reference into
+      // a different DocumentArray causes Mongoose to crash inside $__pathRelativeToParent.
+      // .toObject() strips all internal Mongoose state so the new array can initialise it cleanly.
+      const transactionPlain = transaction.toObject();
+
+      // O(1) removal using the pre-captured index
+      expenseWithTransaction.transactions.splice(transIdx, 1);
+
+      // Reverse the amount impact on the old period
+      expenseWithTransaction.savings += transactionPlain.amount;
+      user.balance += transactionPlain.amount;
+
+      // O(1) lookup of the target expense period via the month map
+      const monthKey = `${newYear}-${newMonth}`;
+      let newExpense = expenseMonthMap.get(monthKey);
+      if (!newExpense) {
+        newExpense = {
+          year: newYear,
+          month: newMonth,
+          transactions: [],
+          savings: 0,
+          income: []
+        };
+        user.expenses.push(newExpense);
+        expenseMonthMap.set(monthKey, newExpense); // keep map consistent
+      }
+
+      // Push the plain object — Mongoose will cast it into a fresh subdocument
+      newExpense.transactions.push(transactionPlain);
+      newExpense.savings -= transactionPlain.amount;
+      user.balance -= transactionPlain.amount;
+
+      activeExpense = newExpense; // subsequent amount-diff adjustments target the new period
     }
 
-    if (targetTx.label !== undefined) transaction.label = targetTx.label;
-    if (targetTx.notes !== undefined) transaction.notes = targetTx.notes;
-    if (targetTx.date) transaction.date = new Date(targetTx.date);
+    // After a date-move, `transaction` is the detached old subdoc — all mutations must go to
+    // the live subdoc that Mongoose created when we pushed transactionPlain into the new array.
+    const activeTransaction = (origMonth !== newMonth || origYear !== newYear)
+      ? activeExpense.transactions[activeExpense.transactions.length - 1]
+      : transaction;
+
+    // Adjust balance & savings if amount changed — use activeExpense (correct period)
+    if (typeof targetTx.amount === 'number' && !isNaN(targetTx.amount)) {
+      const diff = targetTx.amount - activeTransaction.amount;
+      activeExpense.savings -= diff;
+      user.balance -= diff;
+      activeTransaction.amount = targetTx.amount;
+    }
+
+    if (targetTx.label !== undefined) activeTransaction.label = targetTx.label;
+    if (targetTx.notes !== undefined) activeTransaction.notes = targetTx.notes;
+    if (targetTx.date) activeTransaction.date = new Date(targetTx.date);
 
     // If category was changed/corrected by user
-    if (targetTx.category && targetTx.category.trim() !== '' && targetTx.category.trim().toLowerCase() !== (transaction.category || '').toLowerCase()) {
+    if (targetTx.category && targetTx.category.trim() !== '' && targetTx.category.trim().toLowerCase() !== (activeTransaction.category || '').toLowerCase()) {
       const newCategoryName = targetTx.category.trim();
-      transaction.category = newCategoryName;
+      activeTransaction.category = newCategoryName;
 
       let matchCat = user.categories.find(c => (c.categoryName || c.name || '').toLowerCase() === newCategoryName.toLowerCase());
       if (!matchCat) {
@@ -432,7 +499,7 @@ app.put('/api/v1/transactions', async (req, res) => {
       const keywordsToLearn = categoryLearningEngine.normalizeKeywords(
         (targetTx.keywords && targetTx.keywords.length > 0)
           ? targetTx.keywords
-          : (transaction.keywords || [])
+          : (activeTransaction.keywords || [])
       );
 
       if (keywordsToLearn.length > 0) {
@@ -445,8 +512,8 @@ app.put('/api/v1/transactions', async (req, res) => {
         );
       }
 
-      transaction.keywords = keywordsToLearn;
-      transaction.learningStatus = {
+      activeTransaction.keywords = keywordsToLearn;
+      activeTransaction.learningStatus = {
         categoryId: matchCat._id ? matchCat._id.toString() : null,
         categoryConfidence: 1.0,
         categorySource: 'user_corrected'
@@ -454,7 +521,7 @@ app.put('/api/v1/transactions', async (req, res) => {
     }
 
     await user.save();
-    res.status(200).json({ status: 'updated', transaction });
+    res.status(200).json({ status: 'updated', transaction: activeTransaction });
   } catch (error) {
     console.error('Error updating transaction:', error);
     res.sendStatus(500);
