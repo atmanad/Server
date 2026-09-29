@@ -118,7 +118,7 @@ Return JSON:
     "amount": number,
     "date": "YYYY-MM-DD",
     "notes": string,
-    "label": string,
+    "label": "personal",
     "category": "exact-category-name",
     "keywords": [string]
   }]
@@ -241,7 +241,7 @@ Return JSON:
     "amount": number,
     "date": "YYYY-MM-DD",
     "notes": string,
-    "label": string,
+    "label": "personal",
     "category": "exact-category-name",
     "keywords": [string]
   }]
