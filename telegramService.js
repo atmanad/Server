@@ -249,7 +249,7 @@ Return JSON:
 }
 
 Rules:
-- category MUST be exactly one of the user's provided categories
+- category MUST be exactly one of the user's provided categories, use label if provided or personal
 - keywords: up to 3 short keywords for expense nature (no merchant names, no generic words)
 - Extract all expense items if it's an itemized receipt.
 - Use Year/Month from provided date if the image doesn't have any date/month/year
